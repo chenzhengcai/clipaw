@@ -1,8 +1,19 @@
 # CoPaw Test & Coverage Makefile
 
 # ============================================================
-# Dev targets — 一键构建前端 + 安装开发包
+# Dev targets
 # ============================================================
+
+# --- venv 路径 ---
+VENV := $(CURDIR)/.venv
+
+# --- venv 环境管理 ---
+.PHONY: venv
+venv:
+	@echo "=== 创建/检查 .venv 环境 ==="
+	@test -x $(VENV)/bin/python || python3 -m venv $(VENV)
+	@$(VENV)/bin/pip install -q --upgrade pip setuptools wheel
+	@echo "=== .venv 就绪 ==="
 
 # 构建前端控制台并复制到 Python 包目录
 .PHONY: build-console
@@ -14,10 +25,18 @@ build-console:
 	cp -R console/dist/. src/qwenpaw/console/
 	@echo "=== 前端构建完成 ==="
 
-# 一键开发安装：构建前端 + pip install -e .
+# 一键开发安装：构建前端 + .venv 中安装 QwenPaw + pet 桌面依赖
 .PHONY: dev
-dev: build-console
-	pip install -e .
+dev: venv build-console
+	@echo "=== 在 .venv 中安装 QwenPaw（editable） ==="
+	$(VENV)/bin/pip install -e .
+	@echo "=== 安装桌面宠物依赖（PySide6） ==="
+	$(VENV)/bin/pip install -r plugins/bundle/qwenpaw-pet/requirements.txt
+	@echo ""
+	@echo "========================================"
+	@echo "  make dev 完成"
+	@echo "  启动: $(VENV)/bin/qwenpaw start"
+	@echo "========================================"
 
 
 
