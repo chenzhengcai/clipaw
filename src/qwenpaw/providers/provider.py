@@ -171,6 +171,8 @@ class ProviderInfo(BaseModel):
 class Provider(ProviderInfo, ABC):
     """Represents a provider instance with its configuration."""
 
+    thinking_level: str = "close"
+
     @abstractmethod
     async def check_connection(self, timeout: float = 5) -> tuple[bool, str]:
         """Check if the provider is reachable with the current config."""
@@ -367,6 +369,21 @@ class Provider(ProviderInfo, ABC):
             if model.id == model_id:
                 return model
         return None
+
+    def build_thinking_params(self) -> dict:
+        """Return extra parameters to inject into generate_kwargs based on
+        the current thinking_level.
+
+        Subclasses that support reasoning effort should override this to
+        add ``reasoning_effort``.  The default implementation only controls
+        the ``extra_body.thinking`` toggle (enabled/disabled).
+
+        When thinking_level is ``"close"`` (the default), this returns an
+        empty dict so that non-thinking providers are not affected.
+        """
+        if self.thinking_level == "close":
+            return {}
+        return {"extra_body": {"thinking": {"type": "enabled"}}}
 
     @abstractmethod
     def get_chat_model_instance(self, model_id: str) -> ChatModelBase:

@@ -44,6 +44,10 @@ class ModelSlotConfig(BaseModel):
 
     provider_id: str = Field(default="")
     model: str = Field(default="")
+    thinking_level: str = Field(
+        default="close",
+        description="Thinking depth level: close, high, max",
+    )
 
 
 class ActiveModelsInfo(BaseModel):

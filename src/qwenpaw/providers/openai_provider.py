@@ -46,6 +46,50 @@ else:
 class OpenAIProvider(Provider):
     """Provider implementation for OpenAI API and compatible endpoints."""
 
+    # Providers whose APIs support reasoning_effort to distinguish
+    # between "high" and "max" thinking intensity.
+    _EFFORT_PROVIDERS: set[str] = {"deepseek"}
+
+    # Providers that support explicit thinking on/off control via
+    # extra_body.thinking.  For these providers, thinking_level="close"
+    # sends an explicit disabled toggle rather than leaving the default.
+    _THINKING_CONTROL_PROVIDERS: set[str] = {"deepseek", "mimo", "xiaomi"}
+
+    def _supports_thinking_effort(self) -> bool:
+        base_url_lower = self.base_url.lower()
+        for keyword in self._EFFORT_PROVIDERS:
+            if keyword in base_url_lower:
+                return True
+        return False
+
+    def _supports_thinking_control(self) -> bool:
+        base_url_lower = self.base_url.lower()
+        for keyword in self._THINKING_CONTROL_PROVIDERS:
+            if keyword in base_url_lower:
+                return True
+        return False
+
+    def build_thinking_params(self) -> dict:
+        """Override to add ``reasoning_effort`` when the provider supports
+        differentiated thinking intensity (e.g., DeepSeek).
+
+        For providers with known thinking control APIs (DeepSeek, MiMo),
+        ``close`` sends an explicit disabled toggle.  For unknown providers,
+        ``close`` returns an empty dict so they are not affected.
+
+        Providers without effort support (e.g., MiMo) only receive the
+        enabled toggle via ``extra_body`` when thinking is not ``close``.
+        """
+        if self.thinking_level == "close":
+            if self._supports_thinking_control():
+                return {"extra_body": {"thinking": {"type": "disabled"}}}
+            return {}
+
+        params: dict = {"extra_body": {"thinking": {"type": "enabled"}}}
+        if self._supports_thinking_effort():
+            params["reasoning_effort"] = self.thinking_level
+        return params
+
     def _build_default_headers(self) -> dict:
         return dict(self.custom_headers) if self.custom_headers else {}
 
@@ -182,13 +226,35 @@ class OpenAIProvider(Provider):
         if merged_headers:
             client_kwargs["default_headers"] = merged_headers
 
+        # Merge thinking params on top of effective generate_kwargs
+        generate_kwargs = self.get_effective_generate_kwargs(model_id)
+        thinking_params = self.build_thinking_params()
+        thinking_extra = thinking_params.get("extra_body", {}) or {}
+        existing_extra = generate_kwargs.get("extra_body", {}) or {}
+        generate_kwargs["extra_body"] = {**existing_extra, **thinking_extra}
+        if "reasoning_effort" in thinking_params:
+            generate_kwargs["reasoning_effort"] = thinking_params[
+                "reasoning_effort"
+            ]
+
+        logger.info(
+            "[thinking] provider=%s model=%s thinking_level=%s "
+            "supports_effort=%s extra_body=%s reasoning_effort=%s",
+            self.id,
+            model_id,
+            self.thinking_level,
+            self._supports_thinking_effort(),
+            generate_kwargs.get("extra_body"),
+            generate_kwargs.get("reasoning_effort"),
+        )
+
         return OpenAIChatModelCompat(
             model_name=model_id,
             stream=True,
             api_key=self.api_key,
             stream_tool_parsing=False,
             client_kwargs=client_kwargs,
-            generate_kwargs=self.get_effective_generate_kwargs(model_id),
+            generate_kwargs=generate_kwargs,
         )
 
     async def probe_model_multimodal(

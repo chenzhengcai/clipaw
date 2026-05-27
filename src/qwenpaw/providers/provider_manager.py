@@ -1273,7 +1273,12 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             return True
         return False
 
-    async def activate_model(self, provider_id: str, model_id: str):
+    async def activate_model(
+        self,
+        provider_id: str,
+        model_id: str,
+        thinking_level: str = "close",
+    ):
         # Set the active provider and model for the agent. This will update
         # providers.json and determine which provider/model is used when the
         # agent creates chat model instances.
@@ -1292,6 +1297,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self.active_model = ModelSlotConfig(
             provider_id=provider_id,
             model=model_id,
+            thinking_level=thinking_level,
         )
         self.save_active_model(self.active_model)
 
@@ -2128,4 +2134,12 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
             raise ProviderError(
                 message=f"Active provider '{model.provider_id}' not found.",
             )
+        provider.thinking_level = model.thinking_level
+        logger.info(
+            "[thinking] global model loaded: provider=%s model=%s "
+            "thinking_level=%s",
+            model.provider_id,
+            model.model,
+            model.thinking_level,
+        )
         return provider.get_chat_model_instance(model.model)

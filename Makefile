@@ -23,6 +23,13 @@ build-console:
 	@echo "=== 复制构建产物到 src/qwenpaw/console/ ==="
 	mkdir -p src/qwenpaw/console
 	cp -R console/dist/. src/qwenpaw/console/
+	@if [ -d "$(VENV)" ]; then \
+		CONSOLE_DIR=$$($(VENV)/bin/python -c "import qwenpaw.console, pathlib; print(pathlib.Path(qwenpaw.console.__file__).parent)" 2>/dev/null || echo ""); \
+		if [ -n "$$CONSOLE_DIR" ] && [ -d "$$CONSOLE_DIR" ] && [ "$$CONSOLE_DIR" != "$(CURDIR)/src/qwenpaw/console" ]; then \
+			echo "=== 同步构建产物到 .venv: $$CONSOLE_DIR/ ==="; \
+			cp -R console/dist/. "$$CONSOLE_DIR/"; \
+		fi; \
+	fi
 	@echo "=== 前端构建完成 ==="
 
 # 一键开发安装：构建前端 + .venv 中安装 QwenPaw + pet 桌面依赖

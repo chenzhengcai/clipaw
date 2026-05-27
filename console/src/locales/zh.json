@@ -1128,6 +1128,10 @@
     "retry": "重试"
   },
   "modelSelector": {
+    "thinkingLevel": "思考深度",
+    "thinkingClose": "关闭",
+    "thinkingHigh": "高",
+    "thinkingMax": "最大",
     "selectModel": "选择模型",
     "noConfiguredModels": "暂无已配置模型",
     "switchFailed": "切换模型失败",

@@ -192,15 +192,25 @@ export default function ModelSelector() {
 
     savingRef.current = true;
     setSaving(true);
+
+    // Preserve the current thinking_level when switching models
+    const currentThinkingLevel =
+      activeModels?.active_llm?.thinking_level || "close";
+
     try {
       await providerApi.setActiveLlm({
         provider_id: providerId,
         model: modelId,
         scope: "agent",
         agent_id: selectedAgent,
+        thinking_level: currentThinkingLevel,
       });
       setActiveModels({
-        active_llm: { provider_id: providerId, model: modelId },
+        active_llm: {
+          provider_id: providerId,
+          model: modelId,
+          thinking_level: currentThinkingLevel,
+        },
       });
       // Notify ChatPage to refresh multimodal capabilities
       window.dispatchEvent(new CustomEvent("model-switched"));

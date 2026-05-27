@@ -51,6 +51,7 @@ interface ApprovalMessageData {
 import WhisperSpeechButton, {
   WhisperSpeechButtonRef,
 } from "./components/WhisperSpeechButton";
+import ThinkingLevelSelector from "./components/ThinkingLevelSelector";
 
 import {
   toDisplayUrl,
@@ -1185,12 +1186,17 @@ export default function ChatPage() {
         ...(i18nConfig as any)?.sender,
         beforeSubmit: handleBeforeSubmit,
         allowSpeech: whisperChecked && !whisperEnabled,
-        prefix: whisperEnabled ? (
-          <WhisperSpeechButton
-            ref={whisperSpeechRef}
-            onTranscription={handleWhisperTranscription}
-          />
-        ) : undefined,
+        prefix: (
+          <>
+            <ThinkingLevelSelector />
+            {whisperEnabled && (
+              <WhisperSpeechButton
+                ref={whisperSpeechRef}
+                onTranscription={handleWhisperTranscription}
+              />
+            )}
+          </>
+        ),
         attachments: {
           multiple: true,
           trigger: function (props: any) {

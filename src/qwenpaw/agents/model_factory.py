@@ -1013,6 +1013,14 @@ def create_model_and_formatter(
                 message=f"Provider '{model_slot.provider_id}' not found.",
             )
 
+        provider.thinking_level = model_slot.thinking_level
+        logger.info(
+            "[thinking] agent-scoped model loaded: provider=%s model=%s "
+            "thinking_level=%s",
+            model_slot.provider_id,
+            model_slot.model,
+            model_slot.thinking_level,
+        )
         model = provider.get_chat_model_instance(model_slot.model)
         provider_id = model_slot.provider_id
     else:

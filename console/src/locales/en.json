@@ -1221,6 +1221,10 @@
     "hideValue": "Hide value"
   },
   "modelSelector": {
+    "thinkingLevel": "Thinking Depth",
+    "thinkingClose": "Off",
+    "thinkingHigh": "High",
+    "thinkingMax": "Max",
     "selectModel": "Select model",
     "noConfiguredModels": "No configured models",
     "switchFailed": "Failed to switch model",

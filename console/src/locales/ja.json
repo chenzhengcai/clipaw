@@ -984,6 +984,10 @@
     "retry": "再試行"
   },
   "modelSelector": {
+    "thinkingLevel": "思考深度",
+    "thinkingClose": "オフ",
+    "thinkingHigh": "高",
+    "thinkingMax": "最大",
     "selectModel": "モデルを選択",
     "noConfiguredModels": "設定済みモデルがありません",
     "switchFailed": "モデルの切り替えに失敗しました",
