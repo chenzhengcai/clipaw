@@ -318,16 +318,20 @@ const WhisperSpeechButton = forwardRef<
         }
       };
 
+      let hadError = false;
+
       ws.onerror = () => {
-        message.error(t("chat.speech.transcriptionFailed"));
-        cleanup();
+        hadError = true;
+        // Don't show error yet — wait for onclose to see if text arrived
       };
 
       ws.onclose = () => {
-        // Final text was already sent via onmessage("final").
-        // Only fallback if we never received a final response.
-        if (loading && !finalTextRef.current) {
-          // No text was ever received — show error
+        if (loading) {
+          if (finalTextRef.current) {
+            onTranscription(finalTextRef.current, false);
+          } else if (hadError) {
+            message.error(t("chat.speech.transcriptionFailed"));
+          }
         }
         cleanup();
       };

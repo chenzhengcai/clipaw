@@ -112,11 +112,56 @@ def _emit_backend_ready(port: int) -> None:
     print(f"{DESKTOP_READY_PREFIX} {payload}", flush=True)
 
 
+def _load_saved_port(port_file: str) -> int | None:
+    """Read the last-used port from the port file, if it exists."""
+    try:
+        with open(port_file, "r") as f:
+            return int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _save_port(port_file: str, port: int) -> None:
+    """Persist the port for reuse on next launch."""
+    os.makedirs(os.path.dirname(port_file), exist_ok=True)
+    with open(port_file, "w") as f:
+        f.write(str(port))
+
+
+def _bind_port(
+    host: str,
+    preferred: int | None,
+    port_file: str,
+) -> socket.socket:
+    """Bind to *preferred* port, falling back to random if unavailable."""
+    config = uvicorn.Config(
+        "qwenpaw.app._app:app",
+        host=host,
+        port=preferred or 0,
+        reload=False,
+        workers=1,
+    )
+    sock = config.bind_socket()
+    actual = _socket_port(sock)
+    if preferred is not None and actual != preferred:
+        logger.info(
+            "Saved port %d is in use, using port %d instead",
+            preferred,
+            actual,
+        )
+        # Remove stale port so we don't keep trying it
+        try:
+            os.unlink(port_file)
+        except OSError:
+            pass
+    return sock
+
+
 def _run_backend_server(log_level: str) -> None:
     import uvicorn
 
     from qwenpaw.config.utils import write_last_api
-    from qwenpaw.constant import LOG_LEVEL_ENV
+    from qwenpaw.constant import LOG_LEVEL_ENV, WORKING_DIR
     from qwenpaw.utils.logging import (
         SuppressPathAccessLogFilter,
         setup_logger,
@@ -146,20 +191,27 @@ def _run_backend_server(log_level: str) -> None:
         SuppressPathAccessLogFilter(["/console/push-messages"]),
     )
 
-    config = uvicorn.Config(
-        "qwenpaw.app._app:app",
-        host=host,
-        port=0,
-        reload=False,
-        workers=1,
-        log_level=normalized_log_level,
+    # Try to reuse the port from the last session
+    port_file = os.path.join(
+        str(WORKING_DIR), ".qwenpaw", "desktop-port.txt",
     )
-    backend_socket = config.bind_socket()
+    preferred = _load_saved_port(port_file)
+
+    backend_socket = _bind_port(host, preferred, port_file)
     try:
         port = _socket_port(backend_socket)
+        _save_port(port_file, port)
         write_last_api(host, port)
         _emit_backend_ready(port)
-        uvicorn.Server(config).run(sockets=[backend_socket])
+        uvicorn.Server(
+            uvicorn.Config(
+                "qwenpaw.app._app:app",
+                host=host,
+                reload=False,
+                workers=1,
+                log_level=normalized_log_level,
+            ),
+        ).run(sockets=[backend_socket])
     except Exception:
         backend_socket.close()
         raise

@@ -1976,8 +1976,8 @@
       "imageOnlyWarning": "Current model only supports images, non-image files like videos may not be processed correctly"
     },
     "speech": {
-      "startRecording": "Start voice recording (Ctrl+Shift+M)",
-      "stopRecording": "Stop recording (Ctrl+Shift+M)",
+      "startRecording": "Start Recording",
+      "stopRecording": "Stop Recording",
       "transcribing": "Transcribing...",
       "transcriptionDisabled": "Transcription is disabled. Configure a provider in Settings > Voice Transcription.",
       "transcriptionFailed": "Voice transcription failed",
