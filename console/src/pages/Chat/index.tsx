@@ -1290,6 +1290,12 @@ export default function ChatPage() {
 
     const handleBeforeSubmit = async () => {
       if (isComposingRef.current) return false;
+      // Strip voice marker (🎤:) from input before sending
+      const senderEl = document.querySelector('[class*="sender"]');
+      const ta = senderEl?.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (ta) {
+        ta.value = ta.value.replace(/🎤:\s*/g, "").trim();
+      }
       // Reset voice ASR session so new speech starts fresh after send
       whisperSpeechRef.current?.resetSession();
       return true;

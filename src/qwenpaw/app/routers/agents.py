@@ -598,3 +598,26 @@ def _initialize_agent_workspace(
                 ensure_ascii=False,
                 indent=2,
             )
+
+
+@router.put(
+    "/active",
+    summary="Set the active agent",
+    description="Persist the active agent ID to config.json.",
+)
+async def set_active_agent(
+    body: dict = Body(..., examples=[{"agent_id": "xiaomi"}]),
+) -> dict:
+    """Set the active agent and persist to config."""
+    agent_id = str(body.get("agent_id", "")).strip()
+    if not agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required")
+    config = load_config()
+    if agent_id not in config.agents.profiles and agent_id != "default":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent '{agent_id}' not found",
+        )
+    config.agents.active_agent = agent_id
+    save_config(config)
+    return {"active_agent": agent_id}

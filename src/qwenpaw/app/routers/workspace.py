@@ -43,7 +43,11 @@ from ...config.config import load_agent_config, save_agent_config
 from ...agents.memory.agent_md_manager import AgentMdManager
 from ...agents.templates import get_workspace_md_template_id
 from ...agents.utils import copy_workspace_md_files
-from ...constant import BUILTIN_QA_AGENT_ID, SUPPORTED_AGENT_LANGUAGES
+from ...constant import (
+    BUILTIN_QA_AGENT_ID,
+    SUPPORTED_AGENT_LANGUAGES,
+    WORKING_DIR,
+)
 from ..agent_context import get_agent_for_request, get_coding_dir
 
 
@@ -1408,3 +1412,54 @@ async def upload_workspace(
             status_code=500,
             detail=f"Failed to merge workspace: {exc}",
         ) from exc
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Client-side config persistence (survives Tauri port changes)
+# ═══════════════════════════════════════════════════════════════════════
+
+_CLIENT_CONFIG_PATH = os.path.join(
+    os.path.dirname(WORKING_DIR),
+    ".qwenpaw",
+    "client-config.json",
+)
+
+
+def _load_client_config() -> dict:
+    """Load the client-config JSON file. Returns {} if not found."""
+    try:
+        os.makedirs(os.path.dirname(_CLIENT_CONFIG_PATH), exist_ok=True)
+        with open(_CLIENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_client_config(data: dict) -> None:
+    """Save the client-config JSON file."""
+    os.makedirs(os.path.dirname(_CLIENT_CONFIG_PATH), exist_ok=True)
+    with open(_CLIENT_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+@router.get(
+    "/client-config",
+    summary="Get client-side config",
+    description="Returns persisted client config (voice connection flag, shortcut, etc.)",
+)
+async def get_client_config() -> dict:
+    """Get client config that survives Tauri port changes."""
+    return _load_client_config()
+
+
+@router.put(
+    "/client-config",
+    summary="Update client-side config",
+    description="Merge the given fields into the client config.",
+)
+async def put_client_config(body: dict = Body(...)) -> dict:
+    """Update client config."""
+    current = _load_client_config()
+    current.update(body)
+    _save_client_config(current)
+    return current

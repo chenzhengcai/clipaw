@@ -98,10 +98,15 @@ export function loadShortcutMode(): ShortcutMode {
   return raw === "hold" ? "hold" : "toggle";
 }
 
-/** Save shortcut + mode to localStorage. */
-export function saveShortcutConfig(def: ShortcutDef, mode: ShortcutMode): void {
+/** Save shortcut + mode to localStorage and backend. */
+export async function saveShortcutConfig(def: ShortcutDef, mode: ShortcutMode): Promise<void> {
   localStorage.setItem(STORAGE_KEY_SHORTCUT, JSON.stringify(def));
   localStorage.setItem(STORAGE_KEY_MODE, mode);
+  try {
+    const { saveClientConfig } = await import("../../../../api/clientConfig");
+    await saveClientConfig(STORAGE_KEY_SHORTCUT, JSON.stringify(def));
+    await saveClientConfig(STORAGE_KEY_MODE, mode);
+  } catch { /* backend not available */ }
 }
 
 const _MODIFIER_CODES = [

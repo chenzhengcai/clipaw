@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { Card, Input, Form, Radio, Space } from "antd";
 import { useTranslation } from "react-i18next";
 import { envApi } from "../../../../api/modules/env";
+import {
+  saveClientConfig,
+  getClientConfig,
+  removeClientConfig,
+} from "../../../../api/clientConfig";
 import styles from "../index.module.less";
 
 const KEY_API_KEY = "volcengine_asr_api_key";
@@ -12,17 +17,17 @@ const CONNECTION_FLAG = "voice_connected";
 
 /** Clear the connection flag (called when credentials change). */
 export function clearVoiceConnectionFlag(): void {
-  localStorage.removeItem(CONNECTION_FLAG);
+  removeClientConfig(CONNECTION_FLAG);
 }
 
 /** Check if voice connection has been verified. */
 export function isVoiceConnected(): boolean {
-  return localStorage.getItem(CONNECTION_FLAG) === "1";
+  return getClientConfig(CONNECTION_FLAG) === "1";
 }
 
 /** Mark voice connection as verified. */
-export function setVoiceConnected(): void {
-  localStorage.setItem(CONNECTION_FLAG, "1");
+export async function setVoiceConnected(): Promise<void> {
+  await saveClientConfig(CONNECTION_FLAG, "1");
 }
 
 type AuthMode = "new_console" | "old_console";

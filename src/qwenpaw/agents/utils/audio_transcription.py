@@ -729,6 +729,8 @@ async def stream_transcribe_volcengine(
                 _VOLC_WS_URL,
                 additional_headers=extra_headers,
                 max_size=2**23,
+                open_timeout=20,
+                ping_interval=30,
             ) as ws:
                 # Send full client request
                 params = {

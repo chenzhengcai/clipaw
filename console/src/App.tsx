@@ -163,6 +163,11 @@ function AppInner() {
     };
   }, [i18n]);
 
+  // Sync client config from backend on startup (survives Tauri port changes)
+  useEffect(() => {
+    import("./api/clientConfig").then((m) => m.loadClientConfig());
+  }, []);
+
   // Wait for plugins to load before rendering routes that might be patched
   if (pluginsLoading) {
     return null;

@@ -136,4 +136,11 @@ export const agentApi = {
     request<{ ok: boolean; error?: string }>("/workspace/voice-test-connection", {
       method: "POST",
     }),
+
+  /** Persist the active agent to backend config.json. */
+  setActiveAgent: (agentId: string) =>
+    request<{ active_agent: string }>("/agents/active", {
+      method: "PUT",
+      body: JSON.stringify({ agent_id: agentId }),
+    }),
 };
