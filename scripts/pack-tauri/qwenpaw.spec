@@ -137,7 +137,7 @@ a = Analysis(
         "agentscope_runtime",
         "psutil",
         "multipart",
-        "websockets",
+        *collect_submodules("websockets"),
         "modelscope",
         "modelscope.hub.api",
         "modelscope.hub.snapshot_download",

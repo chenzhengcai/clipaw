@@ -974,11 +974,22 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                 pass
 
         # Start Volcengine stream immediately
-        audio_queue, finish = await stream_transcribe_volcengine(
-            on_text=_on_text,
-            on_done=_on_done,
-            on_error=_on_error,
-        )
+        try:
+            audio_queue, finish = await stream_transcribe_volcengine(
+                on_text=_on_text,
+                on_done=_on_done,
+                on_error=_on_error,
+            )
+        except Exception as start_exc:
+            logger.warning(
+                "WS transcribe: failed to start Volcengine stream: %s",
+                start_exc,
+            )
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Failed to start: {start_exc}",
+            })
+            return
 
         # Feed PCM chunks from browser to Volcengine in real-time
         while True:
