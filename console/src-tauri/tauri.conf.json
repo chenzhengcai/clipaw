@@ -36,9 +36,7 @@
     "active": true,
     "targets": ["app", "nsis"],
     "macOS": {
-      "infoPlist": {
-        "NSMicrophoneUsageDescription": "QwenPaw needs microphone access for voice input."
-      },
+      "infoPlist": "Info.plist",
       "entitlements": "entitlements.plist"
     },
     "icon": [
