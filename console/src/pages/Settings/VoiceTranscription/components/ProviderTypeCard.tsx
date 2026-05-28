@@ -55,6 +55,14 @@ export function ProviderTypeCard({
               {t("voiceTranscription.providerTypeLocalWhisperDesc")}
             </span>
           </Radio>
+          <Radio value="volcengine_bigmodel">
+            <span className={styles.optionLabel}>
+              {t("voiceTranscription.providerTypeVolcengine")}
+            </span>
+            <span className={styles.optionDescription}>
+              {t("voiceTranscription.providerTypeVolcengineDesc")}
+            </span>
+          </Radio>
         </Space>
       </Radio.Group>
 

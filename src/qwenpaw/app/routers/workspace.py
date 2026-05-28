@@ -14,11 +14,21 @@ import shutil
 import stat
 import tempfile
 import os
+import uuid as _uuid
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Body, HTTPException, UploadFile, File, Request
+from fastapi import (
+    APIRouter,
+    Body,
+    HTTPException,
+    UploadFile,
+    File,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import ORJSONResponse, Response, StreamingResponse
 from watchfiles import awatch, Change
 from pydantic import BaseModel, Field
@@ -738,7 +748,7 @@ async def put_transcription_provider_type(
     """Set the transcription provider type."""
     raw = body.get("transcription_provider_type")
     provider_type = (str(raw) if raw is not None else "").strip().lower()
-    valid = {"disabled", "whisper_api", "local_whisper"}
+    valid = {"disabled", "whisper_api", "local_whisper", "volcengine_bigmodel"}
     if provider_type not in valid:
         raise HTTPException(
             status_code=400,
@@ -906,6 +916,249 @@ async def post_transcribe_audio(
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+@router.websocket("/transcribe/ws")
+async def ws_transcribe(websocket: WebSocket) -> None:
+    """Streaming voice transcription WebSocket.
+
+    Browser sends raw PCM Int16 16kHz mono chunks in real-time.
+    Backend forwards them immediately to Volcengine BigModel ASR.
+    Partial / final text is pushed back as JSON frames.
+
+    Protocol (browser → server)::
+
+        Binary frame = raw PCM Int16 16kHz mono audio chunk
+        Text frame ``"DONE"`` = recording finished
+
+    Protocol (server → browser)::
+
+        {"type":"partial","text":"..."}   — incremental recognition
+        {"type":"final","text":"..."}     — final result
+        {"type":"error","message":"..."}  — fatal error
+    """
+    from ...agents.utils.audio_transcription import (
+        stream_transcribe_volcengine,
+    )
+    from ...config import load_config
+
+    config = load_config()
+    if config.agents.transcription_provider_type != "volcengine_bigmodel":
+        await websocket.accept()
+        await websocket.send_json(
+            {"type": "error", "message": "Volcengine ASR not configured"},
+        )
+        await websocket.close()
+        return
+
+    await websocket.accept()
+
+    try:
+        # Set up callbacks to push results back to browser
+        async def _on_text(text: str) -> None:
+            try:
+                await websocket.send_json({"type": "partial", "text": text})
+            except Exception:
+                pass
+
+        async def _on_done(text: str) -> None:
+            try:
+                await websocket.send_json({"type": "final", "text": text})
+            except Exception:
+                pass
+
+        async def _on_error(msg: str) -> None:
+            try:
+                await websocket.send_json({"type": "error", "message": msg})
+            except Exception:
+                pass
+
+        # Start Volcengine stream immediately
+        audio_queue, finish = await stream_transcribe_volcengine(
+            on_text=_on_text,
+            on_done=_on_done,
+            on_error=_on_error,
+        )
+
+        # Feed PCM chunks from browser to Volcengine in real-time
+        while True:
+            msg = await websocket.receive()
+            if "text" in msg:
+                if msg["text"] == "DONE":
+                    audio_queue.put_nowait(None)
+                    break
+                if msg["text"] == "RESET":
+                    # Reset ASR session — close current, start fresh
+                    audio_queue.put_nowait(None)
+                    await finish()
+                    logger.debug("WS transcribe: ASR session reset")
+                    audio_queue, finish = await stream_transcribe_volcengine(
+                        on_text=_on_text,
+                        on_done=_on_done,
+                        on_error=_on_error,
+                    )
+                    continue
+                continue
+            if "bytes" in msg:
+                # PCM chunk — forward immediately to Volcengine
+                audio_queue.put_nowait(msg["bytes"])
+
+        # Wait for transcription to finish
+        await finish()
+
+    except WebSocketDisconnect:
+        logger.info("WS transcribe: client disconnected")
+    except Exception:
+        logger.warning("WS transcribe: unexpected error", exc_info=True)
+        try:
+            await websocket.send_json(
+                {"type": "error", "message": "Internal server error"},
+            )
+        except Exception:
+            pass
+
+
+@router.post(
+    "/voice-test-connection",
+    summary="Test Volcengine BigModel ASR connection",
+    description=(
+        "Reads ASR credentials from envs and attempts a WebSocket "
+        "connection to Volcengine BigModel.  Returns "
+        '{"ok":true} or {"ok":false,"error":"..."}.'
+    ),
+)
+async def test_voice_connection() -> dict:
+    """Test Volcengine ASR connectivity with current credentials."""
+    import json as _json_mod
+    import struct as _struct
+
+    try:
+        import websockets
+    except ImportError:
+        return {"ok": False, "error": "websockets library not installed"}
+
+    from ...envs import load_envs
+
+    envs = load_envs()
+    api_key = envs.get("volcengine_asr_api_key", "")
+    app_id = envs.get("volcengine_asr_app_id", "")
+    access_token = envs.get("volcengine_asr_access_token", "")
+
+    if not api_key and not (app_id and access_token):
+        return {"ok": False, "error": "No credentials configured"}
+
+    resource_id = envs.get(
+        "volcengine_asr_resource_id",
+        "volc.bigasr.sauc.duration",
+    )
+
+    if app_id and access_token:
+        headers = {
+            "X-Api-App-Key": app_id,
+            "X-Api-Access-Key": access_token,
+            "X-Api-Resource-Id": resource_id,
+            "X-Api-Request-Id": str(_uuid.uuid4()),
+            "X-Api-Sequence": "-1",
+        }
+    else:
+        headers = {
+            "X-Api-Key": api_key,
+            "X-Api-Resource-Id": resource_id,
+            "X-Api-Request-Id": str(_uuid.uuid4()),
+            "X-Api-Sequence": "-1",
+        }
+
+    WS_URL = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
+
+    # Binary frame helpers (inline to avoid circular imports)
+    def _hdr(mt: int, fl: int, ser: int) -> bytes:
+        h = bytearray(4)
+        h[0] = 0x11  # version=1, header_size=1
+        h[1] = (mt << 4) | fl
+        h[2] = (ser << 4)  # no compression
+        h[3] = 0x00
+        return bytes(h)
+
+    try:
+        async with websockets.connect(
+            WS_URL,
+            additional_headers=headers,
+            max_size=2**23,
+            open_timeout=10,
+        ) as ws:
+            # Send full client request
+            params = {
+                "user": {"uid": "test"},
+                "audio": {
+                    "format": "pcm",
+                    "rate": 16000,
+                    "bits": 16,
+                    "channel": 1,
+                    "language": "zh-CN",
+                },
+                "request": {
+                    "model_name": "bigmodel",
+                    "enable_itn": True,
+                    "enable_punc": True,
+                },
+            }
+            payload = _json_mod.dumps(params, ensure_ascii=False).encode()
+            frame = (
+                _hdr(0b0001, 0b0000, 0b0001)
+                + _struct.pack(">I", len(payload))
+                + payload
+            )
+            await ws.send(frame)
+
+            # Send 200ms of silence as test audio
+            silence = b"\x00" * 6400
+            aframe = (
+                _hdr(0b0010, 0b0000, 0b0000)
+                + _struct.pack(">I", len(silence))
+                + silence
+            )
+            await ws.send(aframe)
+
+            # Send end marker
+            eframe = (
+                _hdr(0b0010, 0b0010, 0b0000)
+                + _struct.pack(">I", 0)
+            )
+            await ws.send(eframe)
+
+            # Read any response — if we get one, connection is good
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=8.0)
+                # Any non-error response means the connection works
+                if len(raw) >= 4:
+                    mt = (raw[1] >> 4) & 0x0F
+                    if mt == 0b1111:  # error frame
+                        # Parse error message
+                        err_off = 4
+                        if len(raw) >= err_off + 8:
+                            es = _struct.unpack(">I", raw[err_off + 4 : err_off + 8])[0]
+                            em = raw[err_off + 8 : err_off + 8 + es].decode(
+                                "utf-8", errors="replace",
+                            )
+                            return {"ok": False, "error": f"Server error: {em}"}
+                    # msg_type 0b1001 = server response → success
+                    return {"ok": True}
+            except asyncio.TimeoutError:
+                pass
+
+            return {"ok": True}
+
+    except websockets.exceptions.InvalidStatus as exc:
+        code = exc.response.status_code
+        if code == 401:
+            return {"ok": False, "error": "Authentication failed (401) — check credentials"}
+        if code == 403:
+            return {"ok": False, "error": "Access denied (403) — resource not purchased"}
+        return {"ok": False, "error": f"Connection rejected (HTTP {code})"}
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": "Connection timed out"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @router.get(

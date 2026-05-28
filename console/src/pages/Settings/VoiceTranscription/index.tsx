@@ -1,38 +1,61 @@
+import { useState, useCallback } from "react";
 import { Button } from "@agentscope-ai/design";
-import { Alert, Spin } from "antd";
+import { Spin, message as antMsg } from "antd";
 import { useTranslation } from "react-i18next";
 import { PageHeader } from "@/components/PageHeader";
+import { agentApi } from "@/api/modules/agent";
 import { useVoiceTranscription } from "./useVoiceTranscription";
 import {
-  AudioModeCard,
-  ProviderTypeCard,
-  ProviderSelectCard,
+  VolcengineConfigCard,
+  ShortcutSettings,
+  clearVoiceConnectionFlag,
+  isVoiceConnected,
+  setVoiceConnected,
 } from "./components";
 import styles from "./index.module.less";
 
 function VoiceTranscriptionPage() {
   const { t } = useTranslation();
-  const {
-    loading,
-    saving,
-    audioMode,
-    setAudioMode,
-    providerType,
-    setProviderType,
-    selectedProviderId,
-    setSelectedProviderId,
-    localWhisperStatus,
-    availableProviders,
-    showProviderSection,
-    isLocalWhisper,
-    isWhisperApi,
-    fetchSettings,
-    handleSave,
-  } = useVoiceTranscription();
+  const [, msgCtx] = antMsg.useMessage();
+  const { loading, saving, handleSave } = useVoiceTranscription();
+  const [testing, setTesting] = useState(false);
+  const [connected, setConnected] = useState(isVoiceConnected);
+
+  const handleTest = useCallback(async () => {
+    setTesting(true);
+    try {
+      const res = await agentApi.testVoiceConnection();
+      if (res.ok) {
+        setVoiceConnected();
+        setConnected(true);
+        antMsg.success(t("voiceTranscription.testSuccess"));
+      } else {
+        clearVoiceConnectionFlag();
+        setConnected(false);
+        antMsg.error(
+          res.error || t("voiceTranscription.testFailed"),
+        );
+      }
+    } catch {
+      clearVoiceConnectionFlag();
+      setConnected(false);
+      antMsg.error(t("voiceTranscription.testFailed"));
+    } finally {
+      setTesting(false);
+    }
+  }, [t]);
+
+  const handleSaveWithCheck = useCallback(async () => {
+    if (!isVoiceConnected()) {
+      antMsg.warning(t("voiceTranscription.testRequired"));
+      return;
+    }
+    await handleSave();
+  }, [handleSave, t]);
 
   if (loading) {
     return (
-      <div className={styles.page}>
+      <div className={styles.voiceTranscriptionPage}>
         <div className={styles.centerState}>
           <Spin />
         </div>
@@ -42,58 +65,40 @@ function VoiceTranscriptionPage() {
 
   return (
     <div className={styles.voiceTranscriptionPage}>
+      {msgCtx}
       <PageHeader
         items={[
           { title: t("nav.settings") },
           { title: t("voiceTranscription.title") },
         ]}
       />
-      <Alert
-        type="info"
-        showIcon
-        message={t("voiceTranscription.transcriptionInfoTitle")}
-        description={
-          isLocalWhisper
-            ? t("voiceTranscription.transcriptionInfoDescLocal")
-            : t("voiceTranscription.transcriptionInfoDesc")
-        }
-      />
       <div className={styles.content}>
-        <AudioModeCard
-          audioMode={audioMode}
-          onAudioModeChange={setAudioMode}
-          localWhisperStatus={localWhisperStatus}
-        />
-
-        {showProviderSection && (
-          <>
-            <ProviderTypeCard
-              providerType={providerType}
-              onProviderTypeChange={setProviderType}
-              isLocalWhisper={isLocalWhisper}
-              localWhisperStatus={localWhisperStatus}
-            />
-
-            {isWhisperApi && (
-              <ProviderSelectCard
-                availableProviders={availableProviders}
-                selectedProviderId={selectedProviderId}
-                onProviderChange={setSelectedProviderId}
-              />
-            )}
-          </>
-        )}
+        <VolcengineConfigCard onConfigChange={(ok) => {
+          if (!ok) { setConnected(false); clearVoiceConnectionFlag(); }
+        }} />
+        <ShortcutSettings />
       </div>
 
       <div className={styles.footerButtons}>
         <Button
-          onClick={fetchSettings}
-          disabled={saving}
+          onClick={handleTest}
+          loading={testing}
+          type={testing ? "default" : "primary"}
+          ghost={!testing}
           style={{ marginRight: 8 }}
         >
-          {t("common.reset")}
+          {testing
+            ? t("voiceTranscription.testing")
+            : connected
+              ? `${t("voiceTranscription.testConnected")} ✓`
+              : t("voiceTranscription.testConnection")}
         </Button>
-        <Button type="primary" onClick={handleSave} loading={saving}>
+        <Button
+          type="primary"
+          onClick={handleSaveWithCheck}
+          loading={saving}
+          disabled={!connected}
+        >
           {t("common.save")}
         </Button>
       </div>

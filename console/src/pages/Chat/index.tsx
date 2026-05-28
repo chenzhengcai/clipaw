@@ -857,6 +857,7 @@ export default function ChatPage() {
   const chatRef = useRef<IAgentScopeRuntimeWebUIRef>(null);
   const pendingClearHistoryRef = useRef(false);
   const whisperSpeechRef = useRef<WhisperSpeechButtonRef>(null);
+  const shortcutCleanupRef = useRef<(() => void) | null>(null);
   const [whisperEnabled, setWhisperEnabled] = useState(false);
   const [whisperChecked, setWhisperChecked] = useState(false);
 
@@ -871,18 +872,41 @@ export default function ChatPage() {
       .finally(() => setWhisperChecked(true));
   }, []);
 
-  const handleWhisperTranscription = useCallback((text: string) => {
-    const senderContainer = document.querySelector('[class*="sender"]');
-    const textarea = senderContainer?.querySelector(
-      "textarea",
-    ) as HTMLTextAreaElement | null;
-    if (textarea) {
+  const handleWhisperTranscription = useCallback(
+    (text: string, isPartial = false) => {
+      const senderContainer = document.querySelector('[class*="sender"]');
+      const textarea = senderContainer?.querySelector(
+        "textarea",
+      ) as HTMLTextAreaElement | null;
+      if (!textarea) return;
+
+      // In streaming mode, each partial text is the full cumulative
+      // result.  Replace the voice-inserted portion rather than appending.
+      const marker = "🎤:";
       const currentValue = textarea.value || "";
-      const newValue = currentValue ? `${currentValue} ${text}` : text;
-      setTextareaValue(textarea, newValue);
+      const markerIdx = currentValue.lastIndexOf(marker);
+
+      if (isPartial) {
+        // Replace everything after the last marker (or replace all)
+        const prefix =
+          markerIdx >= 0
+            ? currentValue.slice(0, markerIdx)
+            : "";
+        const newValue = prefix ? `${prefix}${marker}${text}` : `${marker}${text}`;
+        setTextareaValue(textarea, newValue);
+      } else {
+        // Final text: remove marker and append cleanly
+        const prefix =
+          markerIdx >= 0
+            ? currentValue.slice(0, markerIdx)
+            : currentValue;
+        const newValue = prefix ? `${prefix}${text}` : text;
+        setTextareaValue(textarea, newValue);
+      }
       textarea.focus();
-    }
-  }, []);
+    },
+    [],
+  );
 
   useMessageHistoryNavigation(chatRef, isChatActive, isComposingRef);
   useChatInputDraft(isChatActive);
@@ -897,24 +921,75 @@ export default function ChatPage() {
     [],
   );
 
-  // Shortcut key for voice recording (Ctrl+Shift+M or Cmd+Shift+M on Mac)
+  // Voice shortcut — configurable, supports toggle and hold modes
   useEffect(() => {
-    const handleShortcut = (e: KeyboardEvent) => {
-      if (!isChatActive()) return;
-      // Check for Ctrl+Shift+M (Windows/Linux) or Cmd+Shift+M (Mac)
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        e.shiftKey &&
-        e.key.toLowerCase() === "m"
-      ) {
+    // Lazy-load shortcut helpers to avoid circular deps
+    let cancelled = false;
+    Promise.all([
+      import(
+        "@/pages/Settings/VoiceTranscription/components/ShortcutSettings"
+      ),
+      import(
+        "@/pages/Settings/VoiceTranscription/components/VolcengineConfigCard"
+      ),
+    ]).then(([shortcutMod, voiceMod]) => {
+      if (cancelled) return;
+      const { loadShortcut, loadShortcutMode, matchShortcut } = shortcutMod;
+      const { isVoiceConnected } = voiceMod;
+
+      let shortcut = loadShortcut();
+      let mode = loadShortcutMode();
+      let holdActive = false;
+
+      // Re-read config on storage change
+      const onStorage = () => {
+        shortcut = loadShortcut();
+        mode = loadShortcutMode();
+      };
+      window.addEventListener("storage", onStorage);
+
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (!isChatActive()) return;
+        if (!whisperEnabled) return;
+        if (!isVoiceConnected()) return;
+        if (!matchShortcut(e, shortcut)) return;
+
         e.preventDefault();
-        if (whisperEnabled) {
+        if (mode === "hold") {
+          if (!whisperSpeechRef.current?.isRecording()) {
+            whisperSpeechRef.current?.toggleRecording();
+            holdActive = true;
+          }
+        } else {
           whisperSpeechRef.current?.toggleRecording();
         }
-      }
+      };
+
+      const onKeyUp = (e: KeyboardEvent) => {
+        if (mode !== "hold" || !holdActive) return;
+        if (!matchShortcut(e, shortcut)) return;
+        e.preventDefault();
+        if (whisperSpeechRef.current?.isRecording()) {
+          whisperSpeechRef.current?.toggleRecording();
+        }
+        holdActive = false;
+      };
+
+      document.addEventListener("keydown", onKeyDown);
+      document.addEventListener("keyup", onKeyUp);
+
+      // Store cleanup
+      shortcutCleanupRef.current = () => {
+        document.removeEventListener("keydown", onKeyDown);
+        document.removeEventListener("keyup", onKeyUp);
+        window.removeEventListener("storage", onStorage);
+      };
+    });
+
+    return () => {
+      cancelled = true;
+      shortcutCleanupRef.current?.();
     };
-    document.addEventListener("keydown", handleShortcut);
-    return () => document.removeEventListener("keydown", handleShortcut);
   }, [isChatActive, whisperEnabled]);
   chatIdRef.current = chatId;
   navigateRef.current = navigate;
@@ -1215,6 +1290,8 @@ export default function ChatPage() {
 
     const handleBeforeSubmit = async () => {
       if (isComposingRef.current) return false;
+      // Reset voice ASR session so new speech starts fresh after send
+      whisperSpeechRef.current?.resetSession();
       return true;
     };
 

@@ -110,8 +110,11 @@ adbpg = [
 whisper = [
     "openai-whisper>=20231117",
 ]
+volcengine-asr = [
+    "websockets>=12.0",
+]
 full = [
-    "qwenpaw[local,whisper]",
+    "qwenpaw[local,whisper,volcengine-asr]",
 ]
 sip = [
     "pyVoIP>=1.6.0",

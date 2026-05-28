@@ -130,4 +130,10 @@ export const agentApi = {
     }
     return response.json();
   },
+
+  /** Test Volcengine BigModel ASR connectivity. */
+  testVoiceConnection: () =>
+    request<{ ok: boolean; error?: string }>("/workspace/voice-test-connection", {
+      method: "POST",
+    }),
 };
