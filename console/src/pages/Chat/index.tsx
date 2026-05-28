@@ -481,6 +481,7 @@ function useMessageHistoryNavigation(
 // ---------------------------------------------------------------------------
 
 const DRAFT_STORAGE_KEY = "qwenpaw_chat_input_draft";
+let draftSuppressed = false;
 
 interface DraftState {
   value: string;
@@ -558,11 +559,14 @@ function useChatInputDraft(isChatActive: () => boolean) {
       if (saveTimer) clearTimeout(saveTimer);
       document.removeEventListener("input", handleInput, true);
 
-      // Final save on unmount
-      const textarea = getTextarea();
-      if (textarea) {
-        saveDraft(textarea);
+      // Final save on unmount (skip if message was just sent)
+      if (!draftSuppressed) {
+        const textarea = getTextarea();
+        if (textarea) {
+          saveDraft(textarea);
+        }
       }
+      draftSuppressed = false;
     };
   }, [isChatActive]);
 }
@@ -1290,6 +1294,8 @@ export default function ChatPage() {
 
     const handleBeforeSubmit = async () => {
       if (isComposingRef.current) return false;
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      draftSuppressed = true;
       // Strip voice marker (🎤:) from input before sending
       const senderEl = document.querySelector('[class*="sender"]');
       const ta = senderEl?.querySelector("textarea") as HTMLTextAreaElement | null;
