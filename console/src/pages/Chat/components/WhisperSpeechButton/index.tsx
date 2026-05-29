@@ -315,6 +315,11 @@ const WhisperSpeechButton = forwardRef<
           } else if (data.type === "error") {
             message.error(data.message || t("chat.speech.transcriptionFailed"));
             cleanup();
+            }
+            cleanup();
+          } else if (data.type === "error") {
+            message.error(data.message || t("chat.speech.transcriptionFailed"));
+            cleanup();
           }
         } catch {
           // ignore
