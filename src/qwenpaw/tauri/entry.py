@@ -128,6 +128,22 @@ def _save_port(port_file: str, port: int) -> None:
         f.write(str(port))
 
 
+def _is_port_available(host: str, port: int) -> bool:
+    """Check if a TCP port is available for listening."""
+    import errno as _errno
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind((host, port))
+        return True
+    except OSError as e:
+        if e.errno == _errno.EADDRINUSE:
+            return False
+        raise
+    finally:
+        s.close()
+
+
 def _bind_port(
     host: str,
     preferred: int | None,
@@ -136,27 +152,35 @@ def _bind_port(
     """Bind to *preferred* port, falling back to random if unavailable."""
     import uvicorn
 
+    # Pre-check port availability to avoid noisy uvicorn error logs
+    if preferred is not None:
+        if _is_port_available(host, preferred):
+            config = uvicorn.Config(
+                "qwenpaw.app._app:app",
+                host=host,
+                port=preferred,
+                reload=False,
+                workers=1,
+            )
+            return config.bind_socket()
+        else:
+            logger.info(
+                "Saved port %d is in use, falling back to random",
+                preferred,
+            )
+            try:
+                os.unlink(port_file)
+            except OSError:
+                pass
+
     config = uvicorn.Config(
         "qwenpaw.app._app:app",
         host=host,
-        port=preferred or 0,
+        port=0,
         reload=False,
         workers=1,
     )
-    sock = config.bind_socket()
-    actual = _socket_port(sock)
-    if preferred is not None and actual != preferred:
-        logger.info(
-            "Saved port %d is in use, using port %d instead",
-            preferred,
-            actual,
-        )
-        # Remove stale port so we don't keep trying it
-        try:
-            os.unlink(port_file)
-        except OSError:
-            pass
-    return sock
+    return config.bind_socket()
 
 
 def _run_backend_server(log_level: str) -> None:

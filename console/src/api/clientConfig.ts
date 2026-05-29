@@ -16,7 +16,7 @@ const SYNC_KEYS = new Set([
 
 let _synced = false;
 
-/** Pull backend config → localStorage (call once on app init). */
+/** Pull backend config → localStorage + update agent store (call once on app init). */
 export async function loadClientConfig(): Promise<void> {
   if (_synced) return;
   try {
@@ -26,6 +26,14 @@ export async function loadClientConfig(): Promise<void> {
         if (SYNC_KEYS.has(key) && value !== undefined && value !== null) {
           localStorage.setItem(key, String(value));
         }
+      }
+      // If a persisted agent was loaded, update the zustand store
+      const agentId = data["qwenpaw-last-used-agent"];
+      if (typeof agentId === "string" && agentId) {
+        try {
+          const { useAgentStore } = await import("../stores/agentStore");
+          useAgentStore.getState().setSelectedAgent(agentId);
+        } catch { /* agent store not ready */ }
       }
     }
   } catch {
