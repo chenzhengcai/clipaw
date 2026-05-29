@@ -1419,8 +1419,7 @@ async def upload_workspace(
 # ═══════════════════════════════════════════════════════════════════════
 
 _CLIENT_CONFIG_PATH = os.path.join(
-    os.path.dirname(WORKING_DIR),
-    ".qwenpaw",
+    str(WORKING_DIR),
     "client-config.json",
 )
 
