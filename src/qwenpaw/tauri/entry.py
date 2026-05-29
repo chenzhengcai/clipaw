@@ -134,6 +134,8 @@ def _bind_port(
     port_file: str,
 ) -> socket.socket:
     """Bind to *preferred* port, falling back to random if unavailable."""
+    import uvicorn
+
     config = uvicorn.Config(
         "qwenpaw.app._app:app",
         host=host,
