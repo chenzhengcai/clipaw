@@ -25,6 +25,8 @@ cookbook/_build
 # production
 /build
 dist/
+dist-tauri/
+console/src-tauri/icons/
 .wheelshim/
 # Console frontend build (generated in Docker/CI, do not commit)
 console/.cursor/
