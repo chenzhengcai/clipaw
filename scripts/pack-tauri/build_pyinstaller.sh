@@ -125,7 +125,7 @@ mkdir -p "${BINARIES_DIR}"
 
 DEST="${BINARIES_DIR}/qwenpaw-backend"
 mkdir -p "${DEST}"
-find "${DEST}" -mindepth 1 -exec rm -rf {} +
+rm -rf "${DEST:?}"/*
 cp -R "${BACKEND_DIR}/." "${DEST}/"
 chmod +x "${DEST}/qwenpaw-backend"
 echo "Copied to: ${DEST}"
