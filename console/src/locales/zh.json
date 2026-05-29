@@ -2135,7 +2135,8 @@
     "testConnected": "已连接",
     "testSuccess": "连接成功！语音输入已就绪。",
     "testFailed": "连接失败，请检查凭据配置。",
-    "testRequired": "请先点击「测试连通性」验证连接后再保存。"
+    "testRequired": "请先点击「测试连通性」验证连接后再保存。",
+    "volcengineNotConfigured": "尚未配置，请点击编辑按钮添加凭据"
   },
   "backup": {
     "title": "备份",

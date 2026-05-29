@@ -257,7 +257,8 @@
     "testConnected": "Connected",
     "testSuccess": "Connection successful! Voice input is ready.",
     "testFailed": "Connection failed. Please check your credentials.",
-    "testRequired": "Please test the connection before saving."
+    "testRequired": "Please test the connection before saving.",
+    "volcengineNotConfigured": "Not configured. Click Edit to add credentials."
   },
   "backup": {
     "title": "Backups",

@@ -27,6 +27,7 @@ export interface WhisperSpeechButtonRef {
 interface WhisperSpeechButtonProps {
   disabled?: boolean;
   onTranscription: (text: string, isPartial?: boolean) => void;
+  onStart?: () => void;
 }
 
 // ── Recording icon (animated bars) ──────────────────────────────────────
@@ -149,7 +150,7 @@ function int16ToBuffer(data: Int16Array): ArrayBuffer {
 const WhisperSpeechButton = forwardRef<
   WhisperSpeechButtonRef,
   WhisperSpeechButtonProps
->(({ disabled, onTranscription }, ref) => {
+>(({ disabled, onTranscription, onStart }, ref) => {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -231,6 +232,8 @@ const WhisperSpeechButton = forwardRef<
 
   const startRecording = useCallback(async () => {
     if (internalRecordingRef.current || loading) return;
+
+    onStart?.();
 
     try {
       // Open WebSocket to backend FIRST

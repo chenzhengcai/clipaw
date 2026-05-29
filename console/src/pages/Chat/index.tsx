@@ -876,6 +876,10 @@ export default function ChatPage() {
       .finally(() => setWhisperChecked(true));
   }, []);
 
+  // Track voice-inserted text to replace (not append) cumulative ASR results
+  const voiceBaseRef = useRef(""); // text before voice started
+  const voiceLenRef = useRef(0);   // length of voice text in textarea
+
   const handleWhisperTranscription = useCallback(
     (text: string, isPartial = false) => {
       const senderContainer = document.querySelector('[class*="sender"]');
@@ -884,33 +888,39 @@ export default function ChatPage() {
       ) as HTMLTextAreaElement | null;
       if (!textarea) return;
 
-      // In streaming mode, each partial text is the full cumulative
-      // result.  Replace the voice-inserted portion rather than appending.
-      const marker = "🎤:";
-      const currentValue = textarea.value || "";
-      const markerIdx = currentValue.lastIndexOf(marker);
+      const current = textarea.value || "";
 
       if (isPartial) {
-        // Replace everything after the last marker (or replace all)
-        const prefix =
-          markerIdx >= 0
-            ? currentValue.slice(0, markerIdx)
-            : "";
-        const newValue = prefix ? `${prefix}${marker}${text}` : `${marker}${text}`;
+        // Replace the voice portion: keep prefix, append new voice text
+        const prefixLen = current.length - voiceLenRef.current;
+        const prefix = prefixLen > 0 ? current.slice(0, prefixLen) : "";
+        voiceLenRef.current = text.length;
+        const newValue = prefix ? `${prefix}${text}` : text;
         setTextareaValue(textarea, newValue);
       } else {
-        // Final text: remove marker and append cleanly
-        const prefix =
-          markerIdx >= 0
-            ? currentValue.slice(0, markerIdx)
-            : currentValue;
-        const newValue = prefix ? `${prefix}${text}` : text;
+        // Final: keep what was there before voice started, append final text
+        voiceLenRef.current = 0;
+        const newValue = voiceBaseRef.current
+          ? `${voiceBaseRef.current}${text}`
+          : text;
         setTextareaValue(textarea, newValue);
       }
       textarea.focus();
     },
     [],
   );
+
+  // Snapshot the current input when voice recording starts
+  const voiceSnapshot = useCallback(() => {
+    const senderContainer = document.querySelector('[class*="sender"]');
+    const textarea = senderContainer?.querySelector(
+      "textarea",
+    ) as HTMLTextAreaElement | null;
+    if (textarea) {
+      voiceBaseRef.current = textarea.value || "";
+    }
+    voiceLenRef.current = 0;
+  }, []);
 
   useMessageHistoryNavigation(chatRef, isChatActive, isComposingRef);
   useChatInputDraft(isChatActive);
@@ -1296,12 +1306,6 @@ export default function ChatPage() {
       if (isComposingRef.current) return false;
       localStorage.removeItem(DRAFT_STORAGE_KEY);
       draftSuppressed = true;
-      // Strip voice marker (🎤:) from input before sending
-      const senderEl = document.querySelector('[class*="sender"]');
-      const ta = senderEl?.querySelector("textarea") as HTMLTextAreaElement | null;
-      if (ta) {
-        ta.value = ta.value.replace(/🎤:\s*/g, "").trim();
-      }
       // Reset voice ASR session so new speech starts fresh after send
       whisperSpeechRef.current?.resetSession();
       return true;
@@ -1342,6 +1346,7 @@ export default function ChatPage() {
               <WhisperSpeechButton
                 ref={whisperSpeechRef}
                 onTranscription={handleWhisperTranscription}
+                onStart={voiceSnapshot}
               />
             )}
           </>
