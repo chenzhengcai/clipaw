@@ -479,8 +479,14 @@ function useMessageHistoryNavigation(
 // Chat input draft persistence
 // ---------------------------------------------------------------------------
 
-const DRAFT_STORAGE_KEY = "qwenpaw_chat_input_draft";
+const DRAFT_STORAGE_KEY_PREFIX = "qwenpaw_chat_input_draft";
 let draftSuppressed = false;
+
+function getDraftStorageKey(agentId?: string): string {
+  return agentId
+    ? `${DRAFT_STORAGE_KEY_PREFIX}_${agentId}`
+    : DRAFT_STORAGE_KEY_PREFIX;
+}
 
 interface DraftState {
   value: string;
@@ -488,7 +494,9 @@ interface DraftState {
   selectionEnd: number;
 }
 
-function useChatInputDraft(isChatActive: () => boolean) {
+function useChatInputDraft(isChatActive: () => boolean, agentId?: string) {
+  const storageKey = getDraftStorageKey(agentId);
+
   useEffect(() => {
     if (!isChatActive()) return;
 
@@ -506,9 +514,9 @@ function useChatInputDraft(isChatActive: () => boolean) {
         selectionEnd: textarea.selectionEnd,
       };
       if (draft.value) {
-        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+        localStorage.setItem(storageKey, JSON.stringify(draft));
       } else {
-        localStorage.removeItem(DRAFT_STORAGE_KEY);
+        localStorage.removeItem(storageKey);
       }
     };
 
@@ -531,7 +539,7 @@ function useChatInputDraft(isChatActive: () => boolean) {
       const textarea = getTextarea();
       if (textarea) {
         clearInterval(restoreInterval);
-        const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+        const raw = localStorage.getItem(storageKey);
         if (raw) {
           try {
             const draft: DraftState = JSON.parse(raw);
@@ -567,7 +575,7 @@ function useChatInputDraft(isChatActive: () => boolean) {
       }
       draftSuppressed = false;
     };
-  }, [isChatActive]);
+  }, [isChatActive, storageKey]);
 }
 
 /**
@@ -888,7 +896,7 @@ export default function ChatPage() {
   }, []);
 
   useMessageHistoryNavigation(chatRef, isChatActive, isComposingRef);
-  useChatInputDraft(isChatActive);
+  useChatInputDraft(isChatActive, selectedAgent);
   useChatPasteFromEditor();
 
   const onFileCardClick = useCallback(
@@ -1217,7 +1225,7 @@ export default function ChatPage() {
 
     const handleBeforeSubmit = async () => {
       if (isComposingRef.current) return false;
-      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      localStorage.removeItem(getDraftStorageKey(selectedAgent));
       draftSuppressed = true;
       return true;
     };
