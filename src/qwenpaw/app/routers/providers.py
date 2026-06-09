@@ -94,10 +94,6 @@ class ModelSlotRequest(BaseModel):
         default=None,
         description="Target agent ID when scope is 'agent'",
     )
-    thinking_level: str = Field(
-        default="close",
-        description="Thinking depth level: close, high, max",
-    )
 
 
 class CreateCustomProviderRequest(BaseModel):
@@ -659,10 +655,7 @@ async def set_active_model(
     """Set active model by scope."""
     if body.scope == "global":
         try:
-            await manager.activate_model(
-                body.provider_id, body.model,
-                thinking_level=body.thinking_level,
-            )
+            await manager.activate_model(body.provider_id, body.model)
         except (
             FileNotFoundError,
             RuntimeError,
@@ -693,18 +686,9 @@ async def set_active_model(
         agent_config.active_model = ModelSlotConfig(
             provider_id=body.provider_id,
             model=body.model,
-            thinking_level=body.thinking_level,
         )
         save_agent_config(workspace.agent_id, agent_config)
         # Hot reload agent (async, non-blocking)
-        logger.info(
-            "[thinking] set_active_model agent=%s provider=%s model=%s "
-            "thinking_level=%s — scheduling hot reload",
-            body.agent_id,
-            body.provider_id,
-            body.model,
-            body.thinking_level,
-        )
         schedule_agent_reload(request, workspace.agent_id)
 
     except (
@@ -730,7 +714,6 @@ async def set_active_model(
         active_llm=ModelSlotConfig(
             provider_id=body.provider_id,
             model=body.model,
-            thinking_level=body.thinking_level,
         ),
     )
 

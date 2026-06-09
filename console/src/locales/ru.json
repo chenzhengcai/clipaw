@@ -995,10 +995,6 @@
     "retry": "Повторить"
   },
   "modelSelector": {
-    "thinkingLevel": "Глубина мысли",
-    "thinkingClose": "Выкл",
-    "thinkingHigh": "Высокая",
-    "thinkingMax": "Макс",
     "selectModel": "Выбрать модель",
     "noConfiguredModels": "Нет настроенных моделей",
     "switchFailed": "Не удалось переключить модель",

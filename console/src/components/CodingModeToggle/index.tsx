@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { Modal, Tooltip } from "antd";
 import { Code, FlaskConical, MessageSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useCodingMode } from "../../stores/codingModeStore";
+import { useCodingMode, useProjectDir } from "../../stores/codingModeStore";
 import { useAgentStore } from "../../stores/agentStore";
 import { getApiUrl } from "../../api/config";
 import { buildAuthHeaders } from "../../api/authHeaders";
@@ -17,6 +17,7 @@ export default function CodingModeToggle() {
   const { codingMode, initialized, setCodingMode } = useCodingMode();
   const { selectedAgent } = useAgentStore();
   const navigate = useNavigate();
+  const { projectDir } = useProjectDir();
   const [loading, setLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [showProjectSelect, setShowProjectSelect] = useState(false);
@@ -71,16 +72,18 @@ export default function CodingModeToggle() {
       await deactivate();
       return;
     }
-    // Step 1: show experimental warning on first activation
+    // First-time activation: show experimental warning
     const confirmed = localStorage.getItem(CONFIRMED_KEY);
     if (!confirmed) {
       setShowConfirm(true);
-      return;
+    } else if (projectDir === undefined) {
+      // Never selected a project yet → show project picker
+      setShowProjectSelect(true);
+    } else {
+      // null = workspace default, string = specific path → go directly
+      await activate();
     }
-    // Step 2: always show project picker (user can pick "default workspace"
-    // to skip, or choose/change a project)
-    setShowProjectSelect(true);
-  }, [codingMode, activate, deactivate]);
+  }, [codingMode, activate, deactivate, projectDir]);
 
   const handleConfirm = useCallback(() => {
     localStorage.setItem(CONFIRMED_KEY, "1");

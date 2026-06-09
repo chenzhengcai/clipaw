@@ -59,7 +59,6 @@ export interface ProviderConfigRequest {
 export interface ModelSlotConfig {
   provider_id: string;
   model: string;
-  thinking_level?: "close" | "high" | "max";
 }
 
 export interface ActiveModelsInfo {
@@ -78,7 +77,6 @@ export interface ModelSlotRequest {
   model: string;
   scope: Exclude<ActiveModelScope, "effective">;
   agent_id?: string;
-  thinking_level?: "close" | "high" | "max";
 }
 
 /* ---- Custom provider CRUD ---- */
