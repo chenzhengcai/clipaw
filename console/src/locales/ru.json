@@ -320,6 +320,8 @@
     "broadcast": "Трансляция",
     "broadcastHint": "Транслировать навыки пула во все или выбранные рабочие пространства",
     "refreshHint": "Обновить пул навыков с диска",
+    "deleteExternalConfirm": "Файлы внешнего навыка в {{path}} будут удалены с диска.",
+    "deleteExternalBatchWarning": "Выбранные внешние навыки будут безвозвратно удалены с диска.",
     "broadcastTitle": "Транслировать {{name}}",
     "importBuiltin": "Импорт встроенных",
     "importBuiltinHint": "Импортировать встроенные навыки из исходников в пул",
@@ -2169,7 +2171,18 @@
     "kindBundle": "Пакет",
     "kindTool": "Инструмент",
     "filterByName": "Фильтр по имени",
-    "filterByKind": "Фильтр по типу"
+    "filterByKind": "Фильтр по типу",
+    "marketTitle": "Plugin Market",
+    "marketEmpty": "No plugins found in market",
+    "marketLoadFailed": "Failed to load plugin market",
+    "marketUnavailable": "Plugin Market is currently under maintenance, please try again later",
+    "marketAll": "All",
+    "marketSearch": "Search plugins...",
+    "marketCategory": "Filter by category",
+    "marketSearchResult": "Found {{count}} plugins matching \"{{keyword}}\"",
+    "marketDetails": "Details",
+    "marketDownloads": "Downloads",
+    "marketDeveloper": "Developer"
   },
   "plan": {
     "title": "План",

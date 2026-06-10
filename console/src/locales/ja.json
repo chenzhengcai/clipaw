@@ -320,6 +320,8 @@
     "broadcast": "ブロードキャスト",
     "broadcastHint": "スキルプールのスキルを全てまたは選択したワークスペースにブロードキャスト",
     "refreshHint": "ディスクからスキルプールを更新",
+    "deleteExternalConfirm": "外部スキルのファイル {{path}} をディスクから削除します。",
+    "deleteExternalBatchWarning": "選択した外部スキルはディスクから完全に削除されます。",
     "broadcastTitle": "{{name}} をブロードキャスト",
     "importBuiltin": "ビルトインを取り込む",
     "importBuiltinHint": "ソースからビルトインスキルをプールに取り込みます",
@@ -2154,7 +2156,18 @@
     "kindBundle": "バンドル",
     "kindTool": "ツール",
     "filterByName": "名前で絞り込み",
-    "filterByKind": "タグで絞り込み"
+    "filterByKind": "タグで絞り込み",
+    "marketTitle": "Plugin Market",
+    "marketEmpty": "No plugins found in market",
+    "marketLoadFailed": "Failed to load plugin market",
+    "marketUnavailable": "Plugin Market is currently under maintenance, please try again later",
+    "marketAll": "All",
+    "marketSearch": "Search plugins...",
+    "marketCategory": "Filter by category",
+    "marketSearchResult": "Found {{count}} plugins matching \"{{keyword}}\"",
+    "marketDetails": "Details",
+    "marketDownloads": "Downloads",
+    "marketDeveloper": "Developer"
   },
   "plan": {
     "title": "プラン",
