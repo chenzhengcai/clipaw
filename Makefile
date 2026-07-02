@@ -1,5 +1,53 @@
 # CoPaw Test & Coverage Makefile
 
+# ============================================================
+# Dev targets
+# ============================================================
+
+# --- venv 路径 ---
+VENV := $(CURDIR)/.venv
+
+# --- venv 环境管理 ---
+.PHONY: venv
+venv:
+	@echo "=== 创建/检查 .venv 环境 ==="
+	@test -x $(VENV)/bin/python || python3 -m venv $(VENV)
+	@$(VENV)/bin/pip install -q --upgrade pip setuptools wheel
+	@echo "=== .venv 就绪 ==="
+
+# 构建前端控制台并复制到 Python 包目录
+.PHONY: build-console
+build-console:
+	@echo "=== 构建前端控制台 ==="
+	cd console && npm ci && npm run build
+	@echo "=== 复制构建产物到 src/qwenpaw/console/ ==="
+	mkdir -p src/qwenpaw/console
+	cp -R console/dist/. src/qwenpaw/console/
+	@if [ -d "$(VENV)" ]; then \
+		CONSOLE_DIR=$$($(VENV)/bin/python -c "import qwenpaw.console, pathlib; print(pathlib.Path(qwenpaw.console.__file__).parent)" 2>/dev/null || echo ""); \
+		if [ -n "$$CONSOLE_DIR" ] && [ -d "$$CONSOLE_DIR" ] && [ "$$CONSOLE_DIR" != "$(CURDIR)/src/qwenpaw/console" ]; then \
+			echo "=== 同步构建产物到 .venv: $$CONSOLE_DIR/ ==="; \
+			cp -R console/dist/. "$$CONSOLE_DIR/"; \
+		fi; \
+	fi
+	@echo "=== 前端构建完成 ==="
+
+# 一键开发安装：构建前端 + .venv 中安装 QwenPaw + pet 桌面依赖
+.PHONY: dev
+dev: venv build-console
+	@echo "=== 在 .venv 中安装 QwenPaw（editable） ==="
+	$(VENV)/bin/pip install -e .
+	@echo "=== 安装桌面宠物依赖（PySide6） ==="
+	$(VENV)/bin/pip install -r plugins/bundle/qwenpaw-pet/requirements.txt
+	@echo ""
+	@echo "========================================"
+	@echo "  make dev 完成"
+	@echo "  启动: $(VENV)/bin/qwenpaw start"
+	@echo "========================================"
+
+
+
+
 .PHONY: test test-unit test-contract test-integration test-channel test-channel-contract coverage-full clean
 
 # Python path

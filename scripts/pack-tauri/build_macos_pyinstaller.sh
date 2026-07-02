@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build QwenPaw with Tauri for macOS (PyInstaller backend)
+# Build CliPaw with Tauri for macOS (PyInstaller backend)
 # Creates a self-contained desktop app with bundled Python backend
 #
 # Usage:
@@ -13,7 +13,7 @@ cd "$REPO_ROOT"
 VERSION=$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' src/qwenpaw/__version__.py)
 
 echo "========================================="
-echo "QwenPaw Tauri Build - macOS (PyInstaller)"
+echo "CliPaw Tauri Build - macOS (PyInstaller)"
 echo "========================================="
 echo "Version: ${VERSION}"
 echo ""
@@ -116,7 +116,8 @@ cd ..
 echo "Tauri app built"
 echo ""
 
-APP_PATH="${BUNDLE_DIR}/macos/QwenPaw Desktop.app"
+PRODUCT_NAME=$(node -e "console.log(require('./console/src-tauri/tauri.conf.json').productName)")
+APP_PATH="${BUNDLE_DIR}/macos/${PRODUCT_NAME}.app"
 if [ ! -d "${APP_PATH}" ]; then
     echo "ERROR: No Tauri macOS app found at ${APP_PATH}"
     exit 1
@@ -147,7 +148,7 @@ STAGED_APP_PATH="${DIST_DIR}/$(basename "${APP_PATH}")"
 echo ".app copied to ${STAGED_APP_PATH}"
 
 # Create ZIP archive
-ZIP_NAME="${DIST_ROOT}/QwenPaw-Tauri-${VERSION}-macOS.zip"
+ZIP_NAME="${DIST_ROOT}/CliPaw-Tauri-${VERSION}-macOS.zip"
 if [ -f "${ZIP_NAME}" ]; then
     rm -f "${ZIP_NAME}"
 fi
@@ -168,26 +169,12 @@ else
 fi
 echo ""
 
-UPDATER_NAME="${DIST_ROOT}/QwenPaw-Tauri-${VERSION}-macOS.app.tar.gz"
-case "$(uname -m)" in
-    arm64 | aarch64) UPDATER_TARGET="darwin-aarch64" ;;
-    *) UPDATER_TARGET="darwin-x86_64" ;;
-esac
-python "${REPO_ROOT}/scripts/pack-tauri/generate_update_manifest.py" stage \
-    --bundle-dir "${BUNDLE_DIR}/macos" \
-    --pattern '*.app.tar.gz' \
-    --target "${UPDATER_TARGET}" \
-    --output "${UPDATER_NAME}" \
-    --pubkey-config "${REPO_ROOT}/console/src-tauri/tauri.version.conf.json"
-
-echo ""
 echo "========================================="
 echo "Build Complete!"
 echo "========================================="
 echo "App:          ${APP_PATH}"
 echo "Distribution: ${DIST_DIR}"
 echo "Archive:      ${ZIP_NAME}"
-echo "Updater:      ${UPDATER_NAME}"
 echo ""
 echo "Test: open \"${STAGED_APP_PATH}\""
 echo ""

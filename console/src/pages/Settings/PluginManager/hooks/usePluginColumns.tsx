@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
-import { Tag, Tooltip, Button, Space, Typography } from "antd";
-import { Package, Trash2, CheckCircle, XCircle } from "lucide-react";
+import { Tag, Tooltip, Button, Space, Typography, Switch } from "antd";
+import { Package, Trash2, CheckCircle, XCircle, Palette } from "lucide-react";
 import type { PluginType, PluginInfo } from "@/api/modules/plugin";
 import { PluginTypeTag } from "../components/PluginTypeTag";
 
@@ -9,11 +9,17 @@ const { Text } = Typography;
 interface UsePluginColumnsOptions {
   uninstallingId: string | null;
   onUninstall: (record: PluginInfo) => void;
+  builtinThemeIds?: Set<string>;
+  activeThemeId?: string | null;
+  onToggleTheme?: (themeId: string) => void;
 }
 
 export function usePluginColumns({
   uninstallingId,
   onUninstall,
+  builtinThemeIds,
+  activeThemeId,
+  onToggleTheme,
 }: UsePluginColumnsOptions) {
   const { t } = useTranslation();
 
@@ -22,19 +28,36 @@ export function usePluginColumns({
       title: t("pluginManager.title"),
       dataIndex: "name",
       key: "name",
-      render: (name: string, record: PluginInfo) => (
-        <Space direction="vertical" size={2}>
-          <Space size={8}>
-            <Package size={16} style={{ flexShrink: 0 }} />
-            <Text strong>{name}</Text>
+      render: (name: string, record: PluginInfo) => {
+        const isThemePlugin = builtinThemeIds?.has(
+          record.id.replace("theme-", ""),
+        );
+        return (
+          <Space direction="vertical" size={2}>
+            <Space size={8}>
+              {isThemePlugin ? (
+                <Palette
+                  size={16}
+                  style={{ flexShrink: 0, color: "#7C5CFC" }}
+                />
+              ) : (
+                <Package size={16} style={{ flexShrink: 0 }} />
+              )}
+              <Text strong>{name}</Text>
+              {isThemePlugin && (
+                <Tag color="purple" style={{ fontSize: 11 }}>
+                  Built-in
+                </Tag>
+              )}
+            </Space>
+            {record.description && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {record.description}
+              </Text>
+            )}
           </Space>
-          {record.description && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {record.description}
-            </Text>
-          )}
-        </Space>
-      ),
+        );
+      },
     },
     {
       title: t("pluginManager.type"),
@@ -93,18 +116,31 @@ export function usePluginColumns({
       title: "",
       key: "actions",
       width: 100,
-      render: (_: unknown, record: PluginInfo) => (
-        <Tooltip title={t("pluginManager.uninstall")}>
-          <Button
-            type="text"
-            danger
-            size="small"
-            icon={<Trash2 size={14} />}
-            loading={uninstallingId === record.id}
-            onClick={() => onUninstall(record)}
-          />
-        </Tooltip>
-      ),
+      render: (_: unknown, record: PluginInfo) => {
+        const themeId = record.id.replace("theme-", "");
+        const isThemePlugin = builtinThemeIds?.has(themeId);
+        if (isThemePlugin) {
+          return (
+            <Switch
+              checked={activeThemeId === themeId}
+              onChange={() => onToggleTheme?.(themeId)}
+              size="small"
+            />
+          );
+        }
+        return (
+          <Tooltip title={t("pluginManager.uninstall")}>
+            <Button
+              type="text"
+              danger
+              size="small"
+              icon={<Trash2 size={14} />}
+              loading={uninstallingId === record.id}
+              onClick={() => onUninstall(record)}
+            />
+          </Tooltip>
+        );
+      },
     },
   ];
 }

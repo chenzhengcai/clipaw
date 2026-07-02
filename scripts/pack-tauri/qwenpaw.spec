@@ -181,8 +181,6 @@ backend_exe = EXE(
 )
 
 cli_exe = EXE(
-    pyz,
-    script_entry("cli_entry.py"),
     [],
     name="qwenpaw",
     debug=False,

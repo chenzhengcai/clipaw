@@ -90,6 +90,7 @@ export function useTokenTypeConfig({
       style: {
         lineWidth: 3,
         fillOpacity: 0,
+        shape: "smooth",
       },
       tooltip: {
         title: "date",
