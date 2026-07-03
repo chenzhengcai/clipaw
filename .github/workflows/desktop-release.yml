@@ -1,4 +1,31 @@
-# Build CliPaw Desktop — Tauri only, upload per-platform immediately.
+# =============================================================================
+# CliPaw Desktop Build — Tauri 精简打包流程
+# =============================================================================
+#
+# 设计目的:
+#   相比 main 分支的完整 workflow（包含 legacy 打包、Tauri 打包、校验、
+#   OSS 上传、updater 签名等），本分支只保留 Tauri Windows + macOS 两个
+#   打包 job，打包完成后直接上传到 GitHub Release。
+#
+#   - 不做 release secrets 校验（移除 check-release-secrets job）
+#   - 不做桌面应用功能验证（移除 verify / stop-server / screenshot 步骤）
+#   - 不做 OSS 上传和索引更新（移除 upload-release job 中的 ossutil 逻辑）
+#   - 不做 Tauri updater 签名（不传 TAURI_SIGNING_PRIVATE_KEY 等环境变量；
+#     sync_tauri_version.mjs 检测到密钥缺失时会自动跳过 createUpdaterArtifacts）
+#   - 不需要 packaging 库（generate_update_manifest.py 不会被调用）
+#
+# 打包范围:
+#   1. build-tauri-windows — Windows NSIS 安装包 (.exe)
+#   2. build-tauri-macos  — macOS .app 打包为 .zip
+#
+# 触发方式:
+#   - release published: 自动打包并上传到对应 Release
+#   - workflow_dispatch:  手动触发，通过 release_tag 指定上传目标 Release
+#
+# 上传方式:
+#   每个 job 打包完成后直接用 softprops/action-gh-release 上传到 GitHub
+#   Release，无需中间 artifact 中转。需要 permissions: contents: write。
+# =============================================================================
 
 name: CliPaw Desktop Build
 
