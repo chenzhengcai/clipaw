@@ -370,6 +370,7 @@ class MatrixConfig(BaseChannelConfig):
     mention_pill_in_body: bool = False
     # When True, apply m.mentions + optional pill on outbound messages.
     outbound_structured_mentions: bool = True
+    streaming_enabled: bool = False
 
 
 class VoiceChannelConfig(BaseChannelConfig):
@@ -588,14 +589,6 @@ class AutoMemorySearchConfig(BaseModel):
         ),
     )
 
-    persist_to_context: bool = Field(
-        default=False,
-        description=(
-            "Whether to persist auto memory search tool_call/tool_result "
-            "messages into the conversation context"
-        ),
-    )
-
 
 class EmbeddingModelConfig(BaseModel):
     """Embedding model configuration."""
@@ -653,7 +646,6 @@ class ADBPGMemoryConfig(BaseModel):
         default_factory=lambda: AutoMemorySearchConfig(
             enabled=True,
             max_results=3,
-            persist_to_context=False,
         ),
     )
 
