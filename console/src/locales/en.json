@@ -1072,6 +1072,7 @@
     "runtimeMaxConcurrency": "Max Concurrency",
     "runtimeTimeoutSeconds": "Timeout (seconds)",
     "runtimeMisfireGraceSeconds": "Misfire Grace (seconds)",
+    "runtimeToolSafety": "Tool Safety Check",
     "idTooltip": "System-generated, non-editable, unique UUID assigned at task creation.",
     "nameTooltip": "A friendly name to help you identify this job.",
     "cronTooltip": "Define when the task should run",
@@ -1093,6 +1094,7 @@
     "maxConcurrencyTooltip": "Maximum number of this job that can run simultaneously. Default: 1",
     "timeoutSecondsTooltip": "Maximum execution time in seconds. Job will be terminated if exceeded.",
     "misfireGraceSecondsTooltip": "Grace period for missed executions. If a job misses its scheduled time by more than this, it won't run.",
+    "toolSafetyTooltip": "When enabled, risky tool calls require user approval (may block unattended cron jobs). When disabled, all tools execute without approval prompts, suitable for trusted automated tasks. Default: disabled",
     "executeNowTitle": "Execute Task Now",
     "executeNowContent": "Are you sure you want to execute \"{{name}}\" now?",
     "executeNowConfirm": "Execute Now",
@@ -2213,6 +2215,7 @@
     "prompt1": "Let's start a new journey!",
     "prompt2": "Can you tell me what skills you have?",
     "inputPlaceholder": "\"↑↓\" for message navigation · \"/\" for quick commands (\"/approve\" or \"/deny\" during approvals)",
+    "longTextUploadPrompt": "Please read the uploaded prompt file and answer it.",
     "emptyOutputError": "The assistant returned an empty response.",
     "commands": {
       "clear": {
@@ -2600,13 +2603,13 @@
     "approved": "Tool call approved",
     "denied": "Tool call denied",
     "approveFailed": "Failed to approve",
-    "cancelTask": "Cancel Task",
     "denyFailed": "Failed to deny",
     "timeoutAutoDenied": "Timed out, auto denied",
     "acknowledge": "Got it",
-    "approvePattern": "Approve Pattern",
-    "approveExact": "Approve Exact",
-    "approvalScope": "Approval scope"
+    "approvePattern": "Always Allow",
+    "approveExact": "Just Once",
+    "approvalScope": "Approval scope",
+    "details": "Details"
   },
   "pluginManager": {
     "title": "Plugin Manager",

@@ -865,6 +865,7 @@
     "runtimeMaxConcurrency": "Concorrência máxima",
     "runtimeTimeoutSeconds": "Tempo limite (segundos)",
     "runtimeMisfireGraceSeconds": "Tolerância de execução perdida (segundos)",
+    "runtimeToolSafety": "Verificação de segurança de ferramentas",
     "idTooltip": "Gerado pelo sistema, não editável: UUID único atribuído na criação da tarefa.",
     "nameTooltip": "Um nome amigável para identificar este job.",
     "cronTooltip": "Define quando a tarefa deve ser executada",
@@ -885,6 +886,7 @@
     "maxConcurrencyTooltip": "Número máximo de execuções simultâneas deste job. Padrão: 1",
     "timeoutSecondsTooltip": "Tempo máximo de execução em segundos. O job será encerrado se ultrapassar.",
     "misfireGraceSecondsTooltip": "Período de tolerância para execuções perdidas. Se o job atrasar mais que isso em relação ao horário agendado, não será executado.",
+    "toolSafetyTooltip": "Quando ativado, chamadas de ferramentas de risco requerem aprovação do usuário (pode bloquear jobs cron sem supervisão). Quando desativado, todas as ferramentas são executadas sem aprovação. Padrão: desativado",
     "executeNowTitle": "Executar tarefa agora",
     "executeNowContent": "Deseja executar \"{{name}}\" agora?",
     "executeNowConfirm": "Executar agora",
@@ -2064,6 +2066,7 @@
     "prompt1": "Let's start a new journey!",
     "prompt2": "Can you tell me what skills you have?",
     "inputPlaceholder": "\"↑↓\" for message navigation · \"/\" for quick commands (\"/approve\" or \"/deny\" during approvals)",
+    "longTextUploadPrompt": "Please read the uploaded prompt file and answer it.",
     "emptyOutputError": "O assistente retornou uma resposta vazia.",
     "commands": {
       "clear": {
@@ -2439,9 +2442,17 @@
     "subSession": "Sub-Agent",
     "approved": "Tool call approved",
     "denied": "Tool call denied",
-    "approveFailed": "Falhou to approve",
-    "cancelTask": "Cancelar Task",
-    "denyFailed": "Falhou to deny"
+    "approveFailed": "Falhou ao aprovar",
+    "denyFailed": "Falhou ao negar",
+    "approvePattern": "Sempre Permitir",
+    "approveExact": "Apenas Desta Vez",
+    "approvalScope": "Escopo de aprovação",
+    "details": "Detalhes",
+    "timeoutAutoDenied": "Tempo esgotado, negado automaticamente",
+    "acknowledge": "Entendi",
+    "builtinSource": "Integrado",
+    "ownerAgent": "Agente Proprietário",
+    "executingAgent": "Agente Executando"
   },
   "pluginManager": {
     "title": "Gerenciador de Plugins",
