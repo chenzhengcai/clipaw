@@ -61,6 +61,7 @@ class ActiveModelsInfo(BaseModel):
     """Active models information for provider manager."""
 
     active_llm: ModelSlotConfig | None
+    effective_max_input_length: int | None = None
 
 
 class ACPAgentConfig(BaseModel):
@@ -694,6 +695,14 @@ class ReMeLightMemoryConfig(BaseModel):
         description="Whether to enable memory summarization during compaction",
     )
 
+    inbox_push_enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether to push ReMe auto-memory, auto-dream, and "
+            "auto-resource job results to the inbox"
+        ),
+    )
+
     auto_memory_interval: int | None = Field(
         default=5,
         description="Auto memory every N user queries. 1 means auto "
@@ -703,10 +712,19 @@ class ReMeLightMemoryConfig(BaseModel):
         "background task burden.",
     )
 
+    dream_cron_enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether to enable the dream-based memory optimization job"
+        ),
+    )
+
     dream_cron: str = Field(
         default="0 23 * * *",
-        description="Cron expression for dream-based memory optimization job "
-        "(empty to disable)",
+        description=(
+            "Cron expression for dream-based memory optimization job "
+            "(use dream_cron_enabled to enable/disable)"
+        ),
     )
 
     auto_memory_search_config: AutoMemorySearchConfig = Field(
@@ -774,7 +792,8 @@ class ToolResultPruningConfig(BaseModel):
         le=10,
         description=(
             "Number of recent tool-result-bearing messages to keep at the "
-            "recent preview byte limit before scroll compaction."
+            "recent preview byte limit. Scroll keeps all live previews at "
+            "this limit until pressure-driven pointer folding is required."
         ),
     )
 
@@ -782,8 +801,10 @@ class ToolResultPruningConfig(BaseModel):
         default=3000,
         ge=100,
         description=(
-            "Byte threshold for tool result previews retained in live context "
-            "after scroll compaction."
+            "Older tool-result preview byte limit for non-Scroll context "
+            "strategies. Scroll does not use a fixed old-result size "
+            "threshold; it folds recoverable results only while the rebuilt "
+            "context remains under pressure."
         ),
     )
 
@@ -797,10 +818,15 @@ class ToolResultPruningConfig(BaseModel):
     )
 
     offload_retention_days: int = Field(
-        default=5,
+        default=30,
         ge=1,
-        le=10,
-        description="Number of days to retain tool result files",
+        le=365,
+        description=(
+            "Number of days to retain complete archived tool result files. "
+            "This lifetime is independent of Scroll history retention; after "
+            "expiry, history may still contain the bounded preview but not "
+            "the complete artifact."
+        ),
     )
 
     tool_results_cache: str = Field(
@@ -1063,10 +1089,12 @@ class DoomLoopConfig(BaseModel):
                 ),
             ),
             DoomLoopStageConfig(
-                after=6,
+                after=4,
                 action="stop",
                 prompt=(
-                    "Doom loop: agent stuck after " "6 consecutive repetitions"
+                    "Doom loop: agent stuck "
+                    "after 4 consecutive "
+                    "repetitions"
                 ),
             ),
         ],
