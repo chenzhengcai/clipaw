@@ -192,7 +192,20 @@
     "selectBuiltin": "組み込み",
     "selectNone": "クリア",
     "noPoolSkills": "プールに利用可能なスキルがありません",
-    "addSkillsToAgent": "スキルを追加"
+    "addSkillsToAgent": "スキルを追加",
+    "copyTooltip": "エージェント設定をコピー",
+    "copyDefaultTooltip": "デフォルトエージェントをテンプレートとしてコピー",
+    "copyTitle": "エージェント設定をコピー",
+    "copyNameLabel": "新しいエージェント名",
+    "copyOptionsLabel": "コピー内容",
+    "copyOptionAgentJson": "agent.json（必須）",
+    "copyOptionAgentJsonHint": "解析済みのソース設定を常にコピーし、ID・名前・workspace・channels のみリセットします。ディスク上の agent.json をそのまま複製するわけではありません。",
+    "copyOptionMdFiles": "AGENTS / SOUL / PROFILE / HEARTBEAT / BOOTSTRAP.md",
+    "copyOptionSkills": "skills/ + manifest",
+    "copyOptionJobs": "jobs.json",
+    "copyOptionJobsHint": "ジョブ定義のみをコピーし、実行履歴は含みません。作成後、新しいエージェントはスケジュールに従ってすぐに実行を開始します。",
+    "copySuccess": "エージェント設定のコピーに成功しました",
+    "copyFailed": "エージェント設定のコピーに失敗しました"
   },
   "workspace": {
     "title": "ファイル",
