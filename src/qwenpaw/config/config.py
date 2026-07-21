@@ -35,6 +35,8 @@ from ..constant import (
     LLM_RATE_LIMIT_PAUSE,
     WORKING_DIR,
 )
+from ..utils.atomic_io import write_json_atomic
+from ..utils.logging import sanitize_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -1160,6 +1162,98 @@ class RubricGateConfig(BaseModel):
     )
 
 
+class GateInstanceConfig(BaseModel):
+    """One built-in gate configured in a custom loop mode."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+    )
+    type: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_]*$",
+    )
+    enabled: bool = True
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CustomLoopModeConfig(BaseModel):
+    """A saved custom loop mode made from built-in gates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+    )
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    slash_command: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_-]*$",
+    )
+    enabled: bool = False
+    gates: List[GateInstanceConfig] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def strip_display_name(cls, value: Any) -> Any:
+        """Strip display names before length and uniqueness validation."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @model_validator(mode="after")
+    def validate_pipeline(self) -> "CustomLoopModeConfig":
+        """Reject ambiguous or unsafe pipeline shapes."""
+        gate_ids = [gate.id for gate in self.gates]
+        if len(gate_ids) != len(set(gate_ids)):
+            raise ValueError("Gate instance IDs must be unique")
+
+        gate_types = [gate.type for gate in self.gates if gate.enabled]
+        if len(gate_types) != len(set(gate_types)):
+            raise ValueError("Gate types cannot be repeated")
+        from ..loop.catalog import get_gate_catalog
+
+        get_gate_catalog().validate_exclusive_groups(gate_types)
+        if self.enabled and not gate_types:
+            raise ValueError("Enabled custom modes require an enabled gate")
+        return self
+
+
+def normalize_custom_loop_mode_name(name: str) -> str:
+    """Return the canonical value used for custom mode name uniqueness."""
+    return name.strip().casefold()
+
+
+class GoalLoopModeConfig(BaseModel):
+    """Editable values for the fixed built-in Goal pipeline."""
+
+    max_iterations: int = Field(default=20, ge=1, le=500)
+    max_tokens: int = Field(default=300_000, ge=1)
+
+
+class MissionLoopModeConfig(BaseModel):
+    """Editable values for the fixed built-in Mission pipeline."""
+
+    max_iterations: int = Field(default=20, ge=1, le=100)
+    max_retries_per_story: int = Field(default=3, ge=0, le=10)
+    default_verification_instructions: str = Field(
+        default="",
+        max_length=4000,
+    )
+    default_verify_command: str = Field(default="", max_length=2000)
+
+
 class LoopConfig(BaseModel):
     """Loop engineering configuration."""
 
@@ -1175,6 +1269,148 @@ class LoopConfig(BaseModel):
         default_factory=RubricGateConfig,
         description="Completion check settings",
     )
+    goal: GoalLoopModeConfig = Field(
+        default_factory=GoalLoopModeConfig,
+        description="Fixed Goal mode gate values",
+    )
+    mission: MissionLoopModeConfig = Field(
+        default_factory=MissionLoopModeConfig,
+        description="Fixed Mission mode gate values",
+    )
+    custom_modes: List[CustomLoopModeConfig] = Field(
+        default_factory=list,
+        max_length=20,
+        description="User-defined loop modes built from built-in gates",
+    )
+
+    @model_validator(mode="after")
+    def validate_custom_modes(self) -> "LoopConfig":
+        """Keep custom mode identity and commands unambiguous."""
+        mode_ids = [mode.id for mode in self.custom_modes]
+        if len(mode_ids) != len(set(mode_ids)):
+            raise ValueError("Custom loop mode IDs must be unique")
+        commands = [mode.slash_command for mode in self.custom_modes]
+        if len(commands) != len(set(commands)):
+            raise ValueError("Custom loop slash commands must be unique")
+        names = [
+            normalize_custom_loop_mode_name(mode.name)
+            for mode in self.custom_modes
+        ]
+        if len(names) != len(set(names)):
+            raise ValueError("Custom loop mode names must be unique")
+
+        from ..loop.catalog import get_gate_catalog
+
+        catalog = get_gate_catalog()
+        for mode in self.custom_modes:
+            for gate in mode.gates:
+                catalog.validate_params(gate.type, gate.params)
+        return self
+
+
+def _sanitize_custom_loop_modes(
+    data: Dict[str, Any],
+    agent_id: str,
+) -> None:
+    """Skip invalid saved custom modes before profile validation.
+
+    Custom Loop Modes are optional extensions. One stale or malformed mode
+    must not make the entire Agent profile unavailable.
+    """
+    running = data.get("running")
+    if not isinstance(running, dict):
+        return
+    loop = running.get("loop")
+    if not isinstance(loop, dict):
+        return
+    raw_modes = loop.get("custom_modes")
+    if raw_modes is None:
+        return
+    if not isinstance(raw_modes, list):
+        logger.warning(
+            "Agent '%s' custom Loop Modes were ignored: expected a list",
+            sanitize_log_value(agent_id),
+        )
+        loop["custom_modes"] = []
+        return
+
+    from ..loop.catalog import get_gate_catalog
+
+    catalog = get_gate_catalog()
+    valid_modes: List[Dict[str, Any]] = []
+    mode_ids: Set[str] = set()
+    commands: Set[str] = set()
+    names: Set[str] = set()
+    for index, raw_mode in enumerate(raw_modes):
+        if len(valid_modes) >= 20:
+            logger.warning(
+                "Agent '%s' custom Loop Mode at index %d was skipped: "
+                "the maximum of 20 valid modes was reached",
+                sanitize_log_value(agent_id),
+                index,
+            )
+            continue
+        try:
+            mode = CustomLoopModeConfig.model_validate(raw_mode)
+            for gate in mode.gates:
+                catalog.validate_params(gate.type, gate.params)
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "Agent '%s' custom Loop Mode at index %d was skipped: %s",
+                sanitize_log_value(agent_id),
+                index,
+                sanitize_log_value(exc),
+            )
+            continue
+
+        normalized_name = normalize_custom_loop_mode_name(mode.name)
+        if (
+            mode.id in mode_ids
+            or mode.slash_command in commands
+            or normalized_name in names
+        ):
+            logger.warning(
+                "Agent '%s' duplicate custom Loop Mode '%s' was skipped",
+                sanitize_log_value(agent_id),
+                sanitize_log_value(mode.id),
+            )
+            continue
+        mode_ids.add(mode.id)
+        commands.add(mode.slash_command)
+        names.add(normalized_name)
+        valid_modes.append(mode.model_dump(exclude_none=True))
+
+    loop["custom_modes"] = valid_modes
+
+
+def _sanitize_loop_config(
+    data: Dict[str, Any],
+    agent_id: str,
+) -> None:
+    """Keep invalid optional Loop data from blocking Agent startup."""
+    running = data.get("running")
+    if not isinstance(running, dict) or "loop" not in running:
+        return
+    if not isinstance(running["loop"], dict):
+        logger.warning(
+            "Agent '%s' Loop configuration was invalid; using defaults",
+            sanitize_log_value(agent_id),
+        )
+        running["loop"] = LoopConfig().model_dump(exclude_none=True)
+        return
+
+    _sanitize_custom_loop_modes(data, agent_id)
+    try:
+        validated = LoopConfig.model_validate(running["loop"])
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "Agent '%s' Loop configuration was invalid; using defaults: %s",
+            sanitize_log_value(agent_id),
+            sanitize_log_value(exc),
+        )
+        running["loop"] = LoopConfig().model_dump(exclude_none=True)
+        return
+    running["loop"] = validated.model_dump(exclude_none=True)
 
 
 class AgentsRunningConfig(BaseModel):
@@ -2510,6 +2746,7 @@ def load_agent_config(  # pylint: disable=too-many-branches,too-many-statements
         from .utils import sanitize_mcp_clients
 
         sanitize_mcp_clients(data, agent_id)
+        _sanitize_loop_config(data, agent_id)
 
         agent_config = AgentProfileConfig(**data)
 
@@ -2548,22 +2785,13 @@ def save_agent_config(
 
     agent_ref = config.agents.profiles[agent_id]
     workspace_dir = Path(agent_ref.workspace_dir).expanduser()
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-
     agent_config_path = workspace_dir / "agent.json"
-
-    with open(agent_config_path, "w", encoding="utf-8") as f:
-        json.dump(
-            agent_config.model_dump(exclude_none=True),
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    # Invalidate cache after saving
     with _agent_config_lock:
-        if agent_id in _agent_config_cache:
-            del _agent_config_cache[agent_id]
+        write_json_atomic(
+            agent_config_path,
+            agent_config.model_dump(exclude_none=True),
+        )
+        _agent_config_cache.pop(agent_id, None)
 
 
 def migrate_legacy_config_to_multi_agent() -> bool:
