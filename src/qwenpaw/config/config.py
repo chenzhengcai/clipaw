@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Optional, Union, Dict, List, Literal, Any, Set
 
@@ -1997,202 +1999,119 @@ class BuiltinToolConfig(BaseModel):
     )
 
 
+_BUILTIN_TOOLS_CACHE: Dict[str, BuiltinToolConfig] | None = None
+_BUILTIN_TOOLS_LOCK = threading.Lock()
+
+
+def _reset_builtin_tools_cache_for_tests() -> None:
+    """Clear cached BuiltinToolConfig map (test helper only)."""
+    global _BUILTIN_TOOLS_CACHE
+    with _BUILTIN_TOOLS_LOCK:
+        _BUILTIN_TOOLS_CACHE = None
+
+
+def _copy_builtin_tools(
+    tools: Dict[str, BuiltinToolConfig],
+) -> Dict[str, BuiltinToolConfig]:
+    """Return a shallow dict of model copies so callers cannot mutate cache."""
+    return {name: cfg.model_copy() for name, cfg in tools.items()}
+
+
 # pylint: disable=too-many-nested-blocks
 def _default_builtin_tools() -> Dict[str, BuiltinToolConfig]:
-    """Return a fresh copy of the canonical built-in tool definitions.
+    """Return built-in tool definitions from ``@tool_descriptor`` UI metadata.
 
-    This includes both hardcoded tools and dynamically registered tools
-    from plugins.
+    Plugin tools from manifests are merged afterwards (disabled by default).
+    Successful builds are cached; descriptor import failure fails closed
+    (raises) unless a previous successful snapshot exists.
     """
-    tools = {
-        "execute_shell_command": BuiltinToolConfig(
-            name="execute_shell_command",
-            enabled=True,
-            description="Execute shell commands",
-            icon="💻",
-        ),
-        "read_file": BuiltinToolConfig(
-            name="read_file",
-            enabled=True,
-            description="Read file contents",
-            icon="📄",
-        ),
-        "write_file": BuiltinToolConfig(
-            name="write_file",
-            enabled=True,
-            description="Write content to file",
-            icon="✍️",
-        ),
-        "edit_file": BuiltinToolConfig(
-            name="edit_file",
-            enabled=True,
-            description="Edit file using find-and-replace",
-            icon="🖊️",
-        ),
-        "grep_search": BuiltinToolConfig(
-            name="grep_search",
-            enabled=True,
-            description="Search file contents by pattern",
-            icon="🔍",
-        ),
-        "glob_search": BuiltinToolConfig(
-            name="glob_search",
-            enabled=True,
-            description="Find files matching a glob pattern",
-            icon="📁",
-        ),
-        "browser_use": BuiltinToolConfig(
-            name="browser_use",
-            enabled=True,
-            description="Browser automation and web interaction",
-            icon="🌐",
-        ),
-        "web_search": BuiltinToolConfig(
-            name="web_search",
-            enabled=True,
-            description="Search the web for real-time information",
-            icon="🔎",
-        ),
-        "web_fetch": BuiltinToolConfig(
-            name="web_fetch",
-            enabled=True,
-            description="Fetch and read content from a URL",
-            icon="📥",
-        ),
-        "desktop_screenshot": BuiltinToolConfig(
-            name="desktop_screenshot",
-            enabled=True,
-            description="Capture desktop screenshots",
-            icon="📸",
-        ),
-        "view_image": BuiltinToolConfig(
-            name="view_image",
-            enabled=True,
-            description="Load an image into LLM context for visual analysis",
-            display_to_user=False,
-            icon="🖼️",
-        ),
-        "view_video": BuiltinToolConfig(
-            name="view_video",
-            enabled=True,
-            description="Load a video into LLM context for visual analysis",
-            display_to_user=False,
-            icon="🎥",
-        ),
-        "send_file_to_user": BuiltinToolConfig(
-            name="send_file_to_user",
-            enabled=True,
-            description="Send files to user",
-            icon="📤",
-        ),
-        "get_current_time": BuiltinToolConfig(
-            name="get_current_time",
-            enabled=True,
-            description="Get current date and time",
-            icon="🕐",
-        ),
-        "set_user_timezone": BuiltinToolConfig(
-            name="set_user_timezone",
-            enabled=True,
-            description="Set user timezone",
-            icon="🌍",
-        ),
-        "get_token_usage": BuiltinToolConfig(
-            name="get_token_usage",
-            enabled=True,
-            description="Get llm token usage",
-            icon="📊",
-        ),
-        "delegate_external_agent": BuiltinToolConfig(
-            name="delegate_external_agent",
-            enabled=False,
-            description="Delegate work to an external ACP agent runner",
-            icon="📡",
-        ),
-        "list_agents": BuiltinToolConfig(
-            name="list_agents",
-            enabled=True,
-            description="List configured agents from the local API",
-            icon="🤖",
-        ),
-        "chat_with_agent": BuiltinToolConfig(
-            name="chat_with_agent",
-            enabled=True,
-            description=(
-                "Send a message to another configured agent and wait for "
-                "the response"
-            ),
-            icon="💬",
-        ),
-        "submit_to_agent": BuiltinToolConfig(
-            name="submit_to_agent",
-            enabled=True,
-            description="Submit a background task to another configured agent",
-            icon="📨",
-        ),
-        "check_agent_task": BuiltinToolConfig(
-            name="check_agent_task",
-            enabled=True,
-            description="Check the status of a background agent task",
-            icon="⏳",
-        ),
-        "spawn_subagent": BuiltinToolConfig(
-            name="spawn_subagent",
-            enabled=True,
-            description=(
-                "Spawn an ephemeral sub-task within the current " "workspace"
-            ),
-            icon="🔀",
-        ),
-    }
+    global _BUILTIN_TOOLS_CACHE
+    with _BUILTIN_TOOLS_LOCK:
+        if _BUILTIN_TOOLS_CACHE is not None:
+            return _copy_builtin_tools(_BUILTIN_TOOLS_CACHE)
 
-    # Merge dynamically registered tools from plugins
-    try:
-        from ..plugins.registry import PluginRegistry
+        tools: Dict[str, BuiltinToolConfig] = {}
+        try:
+            # Side-effect import via importlib (not `from ..agents import
+            # tools`) so mypy --follow-imports=skip does not form a static
+            # cycle with agents.tools → delegate_external_agent → config.
+            importlib.import_module("qwenpaw.agents.tools")
+            from ..runtime.tool_registry import get_builtin_tool_funcs
 
-        registry = PluginRegistry()
-        # Access manifests via public method
-        all_manifests = registry.get_all_plugin_manifests()
-        for plugin_id, manifest in all_manifests.items():
-            meta = manifest.get("meta", {})
-            # Support old format: meta.tool_name
-            if meta.get("tool_name"):
-                tool_name = meta["tool_name"]
-                if tool_name not in tools:
-                    tools[tool_name] = BuiltinToolConfig(
-                        name=tool_name,
-                        enabled=False,
-                        description=meta.get(
-                            "tool_description",
-                            f"Tool from plugin {plugin_id}",
-                        ),
-                        display_to_user=True,
-                        async_execution=False,
-                        icon=meta.get("tool_icon", "🔧"),
-                    )
-            # Support new format: meta.tools array
-            tools_list = meta.get("tools", [])
-            if isinstance(tools_list, list):
-                for tool_info in tools_list:
-                    if isinstance(tool_info, dict) and "name" in tool_info:
-                        tool_name = tool_info["name"]
-                        if tool_name not in tools:
-                            tools[tool_name] = BuiltinToolConfig(
-                                name=tool_name,
-                                enabled=False,
-                                description=tool_info.get(
-                                    "description",
-                                    f"Tool from plugin {plugin_id}",
-                                ),
-                                display_to_user=True,
-                                async_execution=False,
-                                icon=tool_info.get("icon", "🔧"),
-                            )
-    except Exception:
-        # Plugins not loaded yet, return hardcoded tools only
-        pass
+            for fn in get_builtin_tool_funcs():
+                desc = getattr(fn, "_tool_descriptor", None)
+                if desc is None:
+                    continue
+                ui = getattr(desc, "ui", None)
+                tools[desc.name] = BuiltinToolConfig(
+                    name=desc.name,
+                    enabled=desc.enabled_by_default,
+                    description=(
+                        (ui.description if ui and ui.description else "")
+                        or desc.description
+                        or ""
+                    ),
+                    display_to_user=(
+                        ui.display_to_user if ui is not None else True
+                    ),
+                    async_execution=desc.async_execution,
+                    icon=(ui.icon if ui and ui.icon else None),
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to build BuiltinToolConfig from tool descriptors: %s",
+                exc,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                "Failed to build built-in tool config from descriptors; "
+                "refusing to persist an empty/incomplete ToolsConfig",
+            ) from exc
 
-    return tools
+        # Merge dynamically registered tools from plugins
+        try:
+            from ..plugins.registry import PluginRegistry
+
+            registry = PluginRegistry()
+            all_manifests = registry.get_all_plugin_manifests()
+            for plugin_id, manifest in all_manifests.items():
+                meta = manifest.get("meta", {})
+                if meta.get("tool_name"):
+                    tool_name = meta["tool_name"]
+                    if tool_name not in tools:
+                        tools[tool_name] = BuiltinToolConfig(
+                            name=tool_name,
+                            enabled=False,
+                            description=meta.get(
+                                "tool_description",
+                                f"Tool from plugin {plugin_id}",
+                            ),
+                            display_to_user=True,
+                            async_execution=False,
+                            icon=meta.get("tool_icon", "🔧"),
+                        )
+                tools_list = meta.get("tools", [])
+                if isinstance(tools_list, list):
+                    for tool_info in tools_list:
+                        if isinstance(tool_info, dict) and "name" in tool_info:
+                            tool_name = tool_info["name"]
+                            if tool_name not in tools:
+                                tools[tool_name] = BuiltinToolConfig(
+                                    name=tool_name,
+                                    enabled=False,
+                                    description=tool_info.get(
+                                        "description",
+                                        f"Tool from plugin {plugin_id}",
+                                    ),
+                                    display_to_user=True,
+                                    async_execution=False,
+                                    icon=tool_info.get("icon", "🔧"),
+                                )
+        except Exception as exc:
+            logger.debug("Plugin tool merge skipped: %s", exc)
+
+        _BUILTIN_TOOLS_CACHE = tools
+        return _copy_builtin_tools(tools)
 
 
 class ToolsConfig(BaseModel):
