@@ -333,11 +333,13 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
         # --- Built-in modes (CodingMode, MissionMode) ---
         try:
             from ..modes.coding import CodingMode
+            from ..modes.default import DefaultMode
             from ..modes.goal import GoalMode
             from ..modes.mission import MissionMode
 
             # pylint: disable-next=protected-access
             workspace_registry._bootstrap_kwargs["builtin_mode_clses"] = [
+                DefaultMode,
                 CodingMode,
                 MissionMode,
                 GoalMode,
@@ -416,9 +418,11 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             from ..plugins.loader import PluginLoader
             from ..plugins.runtime import RuntimeHelpers
 
-            plugin_dirs = [
-                get_plugins_dir(),
-            ]
+            # PawApps install into the plugins dir alongside other plugins
+            # and load through the same pipeline as 'app'-type plugins
+            # (plugin.json carrying meta.pawapp); surfaced only in the App
+            # Center, hidden from the sidebar.
+            plugin_dirs = [get_plugins_dir()]
 
             plugin_loader = PluginLoader(plugin_dirs)
 
