@@ -202,6 +202,17 @@
         "description": "Loop Goal — Agent theo đuổi mục tiêu liên tục, tự đánh giá qua Rubric"
       }
     },
+    "turnUsagePopover": {
+      "ariaLabel": "Xem token lượt và mức dùng ngữ cảnh",
+      "turn": "Lượt này",
+      "turnEstimated": "Lượt này ~",
+      "tok": "tok",
+      "inOut": "in {{inTok}} · out {{outTok}}",
+      "contextLabel": "Cửa sổ ngữ cảnh:",
+      "manageContext": "Quản lý ngữ cảnh",
+      "compact": "Nén",
+      "new": "Cuộc trò chuyện mới"
+    },
     "contextMenu": {
       "open": "Mở",
       "rename": "Đổi tên",
@@ -1160,10 +1171,15 @@
     "status": "Trạng thái",
     "totalItems": "Tổng {{count}} mục",
     "botPrefix": "Tiền tố bot",
-    "filterToolMessages": "Hiển thị tin nhắn công cụ",
-    "filterToolMessagesTooltip": "Hiển thị lời gọi công cụ và kết quả cho người dùng (tắt để ẩn)",
-    "filterThinking": "Hiển thị suy luận",
-    "filterThinkingTooltip": "Hiển thị nội dung suy luận của mô hình (tắt để ẩn)",
+    "showToolCalls": "Hiển thị thông tin gọi công cụ",
+    "showToolCallsTooltip": "Hiển thị thông tin gọi công cụ cho người dùng (tắt để ẩn)",
+    "showToolResults": "Hiển thị thông tin kết quả công cụ",
+    "showToolResultsTooltip": "Hiển thị thông tin kết quả công cụ cho người dùng (tắt để ẩn)",
+    "toolCallMaxLength": "Độ dài hiển thị tối đa của lệnh gọi công cụ",
+    "toolResultMaxLength": "Độ dài hiển thị tối đa của kết quả công cụ",
+    "toolMaxLengthTooltip": "Đặt là 0 để không giới hạn độ dài",
+    "showThinking": "Hiển thị suy luận",
+    "showThinkingTooltip": "Hiển thị nội dung suy luận của mô hình (tắt để ẩn)",
     "noTextDebounce": "Debounce không văn bản",
     "noTextDebounceTooltip": "Khi bật, các tin nhắn chỉ chứa phương tiện (ảnh/video/tệp) sẽ được lưu tạm, đợi tin nhắn văn bản tiếp theo đến rồi gộp xử lý. Tắt để xử lý ngay tất cả tin nhắn. Tin nhắn thoại luôn được xử lý ngay.",
     "streamingEnabled": "Xuất streaming",

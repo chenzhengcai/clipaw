@@ -34,11 +34,12 @@ import { IconButton } from "@agentscope-ai/design";
 import ChatActionGroup from "./components/ChatActionGroup";
 import ChatSessionDrawer from "./components/ChatSessionDrawer";
 import { useSidebarModeStore } from "../../stores/sidebarModeStore";
-import TurnUsageAction from "./components/TurnUsageAction";
+import ContextUsageIndicator from "./components/ContextUsageIndicator";
 import {
   patchContextMaxInputLength,
   wrapChatResponseUsageStream,
 } from "./turnUsage";
+import { useTurnUsageStore } from "./turnUsageStore";
 import ChatHeaderTitle from "./components/ChatHeaderTitle";
 import ChatSessionInitializer from "./components/ChatSessionInitializer";
 import { ApprovalCard } from "../../components/ApprovalCard/ApprovalCard";
@@ -2091,7 +2092,26 @@ export default function ChatPage() {
       if (!pendingClearHistoryRef.current) return;
       pendingClearHistoryRef.current = false;
       chatRef.current?.messages.removeAllMessages();
+      useTurnUsageStore.getState().setSnapshot(null);
     });
+  }, []);
+
+  const handleCompactCommand = useCallback(() => {
+    chatRef.current?.input.submit({ query: "/compact" });
+  }, []);
+
+  const handleNewCommand = useCallback(() => {
+    const current = useTurnUsageStore.getState().snapshot;
+    const maxInputLength = current?.context_usage?.max_input_length ?? 131072;
+    useTurnUsageStore.getState().setSnapshot({
+      usage: null,
+      context_usage: {
+        estimated_tokens: 0,
+        max_input_length: maxInputLength,
+        context_usage_ratio: 0,
+      },
+    });
+    chatRef.current?.input.submit({ query: "/new" });
   }, []);
 
   // Tell sessionApi which session to put first in getSessionList, so the library's
@@ -2909,13 +2929,25 @@ export default function ChatPage() {
           </>
         ),
         actionAffix: (
-          <ApprovalLevelToggle
-            sessionId={queueSessionId}
-            runningConfigApprovalLevel={runningConfigApprovalLevel}
-            onChange={(sessionOverride) => {
-              sessionApprovalLevelRef.current = sessionOverride;
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
             }}
-          />
+          >
+            <ContextUsageIndicator
+              onCompact={handleCompactCommand}
+              onNew={handleNewCommand}
+            />
+            <ApprovalLevelToggle
+              sessionId={queueSessionId}
+              runningConfigApprovalLevel={runningConfigApprovalLevel}
+              onChange={(sessionOverride) => {
+                sessionApprovalLevelRef.current = sessionOverride;
+              }}
+            />
+          </span>
         ),
         attachments: {
           multiple: true,
@@ -3061,13 +3093,6 @@ export default function ChatPage() {
       actions: {
         list: [
           {
-            render: ({
-              data,
-            }: {
-              data: { data?: Record<string, unknown> };
-            }) => <TurnUsageAction data={data} />,
-          },
-          {
             icon: (
               <span title={t("common.copy")}>
                 <SparkCopyLine />
@@ -3159,6 +3184,8 @@ export default function ChatPage() {
     handleQueueSkip,
     runState,
     isOwner,
+    handleCompactCommand,
+    handleNewCommand,
   ]);
 
   return (
