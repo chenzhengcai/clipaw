@@ -389,7 +389,7 @@ class Envelope:
                     name=event.tool_call_name,
                     arguments="",
                 ).model_dump(),
-                delta=False,
+                delta=True,
                 index=0,
             )
             stub_content.msg_id = msg_id
@@ -414,12 +414,13 @@ class Envelope:
 
             delta_content = DataContent(
                 type=ContentType.DATA,
+                # The frontend appends string fields from DATA deltas. Only
+                # send the incremental argument fragment here; repeating the
+                # call ID or name would concatenate those fields as well.
                 data=FunctionCall(
-                    call_id=call_id,
-                    name=state["name"],
-                    arguments=state["args_json_acc"],
-                ).model_dump(),
-                delta=False,
+                    arguments=event.delta or "",
+                ).model_dump(exclude_none=True),
+                delta=True,
                 index=0,
             )
             delta_content.msg_id = state["message"].id
