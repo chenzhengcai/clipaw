@@ -72,6 +72,54 @@ def _ensure_url_scheme(url: str) -> str:
     return "file://" + resolved
 
 
+_PREVIEW_MARKER = "/files/preview/"
+
+
+def _file_url_to_local_path(url: str) -> str | None:
+    """Extract a local filesystem path from a file attachment URL.
+
+    Handles three formats produced by the console upload + SDK pipeline:
+    - ``http(s)://host/files/preview/<path>`` — extract ``<path>``
+    - ``file:///path`` — strip the scheme
+    - ``/absolute/path`` — pass through
+    """
+    if not url or not isinstance(url, str):
+        return None
+    s = url.strip()
+    if not s:
+        return None
+
+    idx = s.find(_PREVIEW_MARKER)
+    if idx != -1:
+        path = s[idx + len(_PREVIEW_MARKER):]
+        q = path.find("?")
+        if q != -1:
+            path = path[:q]
+        h = path.find("#")
+        if h != -1:
+            path = path[:h]
+        if not path:
+            return None
+        decoded = unquote(path)
+        if not decoded.startswith("/"):
+            decoded = "/" + decoded
+        return decoded
+
+    if s.startswith("file:"):
+        s = s[5:]
+        s = s.lstrip("/")
+        decoded = unquote(s)
+        return "/" + decoded if not decoded.startswith("/") else decoded
+
+    if s.startswith(("/", "~")):
+        return unquote(s)
+
+    if len(s) >= 3 and s[1] == ":" and s[2] in ("/", "\\"):
+        return unquote(s)
+
+    return None
+
+
 # pylint: disable=too-many-branches
 def _request_input_to_msgs(
     input_list: List[Any],
@@ -154,21 +202,29 @@ def _request_input_to_msgs(
             elif ctype == "file":
                 url = getattr(c, "file_url", None) or getattr(c, "url", None)
                 if url:
-                    url = _ensure_url_scheme(str(url))
-                    try:
+                    local_path = _file_url_to_local_path(str(url))
+                    filename = (
+                        getattr(c, "file_name", None)
+                        or getattr(c, "filename", None)
+                        or (local_path.rsplit("/", 1)[-1]
+                            if local_path else "file")
+                    )
+                    if local_path:
                         blocks.append(
-                            DataBlock(
-                                source=URLSource(
-                                    url=url,
-                                    media_type="application/octet-stream",
+                            TextBlock(
+                                type="text",
+                                text=(
+                                    f"File '{filename}' is available at: "
+                                    f"{local_path}"
                                 ),
-                                name=getattr(c, "file_name", None),
                             ),
                         )
-                    except Exception:
-                        logger.debug(
-                            "Failed to create DataBlock for file url=%s",
-                            url,
+                    else:
+                        blocks.append(
+                            TextBlock(
+                                type="text",
+                                text=f"File '{filename}'",
+                            ),
                         )
 
         if not blocks:
