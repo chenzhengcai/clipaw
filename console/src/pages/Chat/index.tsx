@@ -1840,6 +1840,7 @@ export default function ChatPage() {
         return;
       }
       const queueText = prepareLoopModeMessage(val);
+      const enqueueIdentity = sessionApi.getSessionIdentity();
       useMessageQueueStore.getState().enqueue(queueSessionId, {
         text: queueText,
         attachments:
@@ -1851,8 +1852,8 @@ export default function ChatPage() {
                 size: f.size,
               }))
             : undefined,
-        userId: window.currentUserId || DEFAULT_USER_ID,
-        channel: window.currentChannel || DEFAULT_CHANNEL,
+        userId: enqueueIdentity.userId,
+        channel: enqueueIdentity.channel,
       });
       // Clear tracked attachments after enqueuing
       pendingFileListRef.current = [];
@@ -2247,6 +2248,12 @@ export default function ChatPage() {
       // agent's conversation.
       setChatLoading(true);
 
+      // Window identity globals are only rewritten when another session
+      // loads, so reset them explicitly — otherwise the new agent inherits
+      // the previous agent's session/channel (possibly a deleted channel)
+      // and the first message of a fresh chat would carry it.
+      sessionApi.resetWindowIdentity();
+
       // Save current chat ID for the agent we're leaving
       const currentChatId =
         chatIdRef.current || lastSessionIdRef.current || undefined;
@@ -2524,6 +2531,7 @@ export default function ChatPage() {
           return false;
         }
         const queueText = prepareLoopModeMessage(val);
+        const enqueueIdentity = sessionApi.getSessionIdentity();
         useMessageQueueStore.getState().enqueue(queueSessionId, {
           text: queueText,
           attachments:
@@ -2535,8 +2543,8 @@ export default function ChatPage() {
                   size: f.size,
                 }))
               : undefined,
-          userId: window.currentUserId || DEFAULT_USER_ID,
-          channel: window.currentChannel || DEFAULT_CHANNEL,
+          userId: enqueueIdentity.userId,
+          channel: enqueueIdentity.channel,
         });
         pendingFileListRef.current = [];
         if (textarea) setTextareaValue(textarea, "");
