@@ -1,13 +1,15 @@
 import {
   Layout,
+  Menu,
   Button,
   Modal,
   Input,
   Form,
   Tooltip,
+  Badge,
   Popover,
 } from "antd";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useAppMessage } from "../hooks/useAppMessage";
@@ -34,15 +36,18 @@ import { useCodingMode } from "../stores/codingModeStore";
 import { useSidebarModeStore } from "../stores/sidebarModeStore";
 import { buildSessionPath, getSessionIdFromPath } from "../utils/sessionRoute";
 import sessionApi from "../pages/Chat/sessionApi";
+import { useInboxWobble } from "../hooks/useInboxWobble";
 import styles from "./index.module.less";
 import { useTheme } from "../contexts/ThemeContext";
 import { useMenuItems, useRoutes } from "../plugins/registry/hooks";
 import { Slot } from "../plugins/registry/Slot";
 import {
+  deriveOpenKeys,
   findMenuItem,
   flattenMenu,
   renderIcon,
   routeIdToPath,
+  toAntdItems,
 } from "./registry/adapter";
 import type { FlatMenuEntry } from "./registry/adapter";
 import type { MenuItem } from "../plugins/registry/types";
@@ -101,50 +106,6 @@ interface SidebarProps {
   selectedKey: string;
 }
 
-// ── Section Header ────────────────────────────────────────────────────────
-
-function SectionHeader({
-  label,
-  collapsed: isCollapsed,
-  onClick,
-}: {
-  label: string;
-  collapsed: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={styles.sectionHeader}
-      onClick={onClick}
-      type="button"
-      aria-expanded={!isCollapsed}
-    >
-      <span className={styles.sectionHeaderLabel}>{label}</span>
-      <span
-        className={`${styles.sectionHeaderArrow} ${
-          isCollapsed ? styles.sectionHeaderArrowCollapsed : ""
-        }`}
-      >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 12 12"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            d="M4.5 2.5L8 6L4.5 9.5"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </span>
-    </button>
-  );
-}
-
 // ── Sidebar ───────────────────────────────────────────────────────────────
 
 export default function Sidebar({ selectedKey }: SidebarProps) {
@@ -170,7 +131,12 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(isMobileSidebarViewport);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(isMobileSidebarViewport);
-  const [hasInboxUnread, setHasInboxUnread] = useState(false);
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+  const [hasPendingApprovals, setHasPendingApprovals] = useState(false);
+  const [shakeInbox, setShakeInbox] = useState(false);
+  const [wobbleEnabled] = useInboxWobble();
+  const currentApprovalIdsRef = useRef<Set<string>>(new Set());
+  const seenApprovalIdsRef = useRef<Set<string>>(new Set());
 
   // Sidebar mode: "simple" (only core items) or "full" (everything)
   const { mode: sidebarMode } = useSidebarModeStore();
@@ -204,24 +170,6 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       ...flattenMenu(settingsMenu, routes, 16),
     ];
   }, [agentMenu, settingsMenu, routes, sidebarMode]);
-
-  // ── Collapsible section state ──────────────────────────────────────────
-  // Default: all sections collapsed
-  const [collapsedSections, setCollapsedSections] = useState<
-    Record<string, boolean>
-  >({
-    "core.control-group": true,
-    "core.agent-group": true,
-    "core.settings-group": true,
-    "plugins-group": true,
-  });
-
-  const toggleSection = useCallback((sectionKey: string) => {
-    setCollapsedSections((prev) => ({
-      ...prev,
-      [sectionKey]: !prev[sectionKey],
-    }));
-  }, []);
 
   // ── Effects ──────────────────────────────────────────────────────────────
 
@@ -266,9 +214,17 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
           api.getPushMessages(),
         ]);
         const hasUnreadEvents = (inboxRes?.events?.length || 0) > 0;
-        const hasPendingApprovals =
-          (pushRes?.pending_approvals?.length || 0) > 0;
-        setHasInboxUnread(hasUnreadEvents || hasPendingApprovals);
+        const approvals = pushRes?.pending_approvals || [];
+        const currentIds = new Set(
+          approvals.map((a: { request_id: string }) => a.request_id),
+        );
+        currentApprovalIdsRef.current = currentIds;
+        const hasNewApprovals =
+          currentIds.size > 0 &&
+          [...currentIds].some((id) => !seenApprovalIdsRef.current.has(id));
+        setShakeInbox(hasNewApprovals);
+        setHasUnreadMessages(hasUnreadEvents);
+        setHasPendingApprovals(currentIds.size > 0);
       } catch {
         // Keep previous state when polling fails.
       }
@@ -280,7 +236,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
     return () => window.clearInterval(timer);
   }, []);
 
-// ── Pre-fetch sessions on mount ───────────────────────────────────────────
+  // ── Pre-fetch sessions on mount ───────────────────────────────────────────
   // On mobile the sidebar starts collapsed so SidebarSessionList is unmounted
   // and never fetches.  When the user expands the sidebar the list mounts fresh
   // but the Zustand store may still be empty (ChatSessionInitializer may not
@@ -307,32 +263,75 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
     };
   }, []);
 
+  // ── Inbox badge dot & wobble ─────────────────────────────────────────────
+  const hasInboxUnread = hasUnreadMessages || hasPendingApprovals;
+  const inboxDotColor = hasPendingApprovals
+    ? "#e04848"
+    : "rgba(255, 157, 77, 1)";
+  const effectiveShake = shakeInbox && wobbleEnabled;
+
   // ── Adapter: convert MenuItem trees to antd, with inbox badge decoration.
 
-  /** Wrap the inbox label with the unread badge while keeping other labels intact. */
-  const decorateLabel = useCallback(
-    (item: MenuItem, label: ReactNode): ReactNode => {
-      if (item.id !== "core.inbox" || label == null) return label;
-      return (
-        <span style={{ position: "relative", display: "inline-flex" }}>
-          {label}
-          {hasInboxUnread && (
-            <span
-              style={{
-                position: "absolute",
-                top: -1,
-                right: -3,
-                width: 6,
-                height: 6,
-                borderRadius: "50%",
-                background: "rgba(255, 157, 77, 1)",
-              }}
-            />
-          )}
-        </span>
-      );
+  /** Mark current approvals as "seen" so the wobble stops. */
+  const handleInboxHover = useCallback(() => {
+    seenApprovalIdsRef.current = new Set(currentApprovalIdsRef.current);
+    setShakeInbox(false);
+  }, []);
+
+  /**
+   * Bridge hover events from the antd Menu `<li>` to our handler.
+   * addEventListener de-duplicates the same function reference, so re-calling
+   * on the same element is harmless; old detached elements are GC'd naturally.
+   */
+  const inboxLiRefCallback = useCallback(
+    (node: HTMLSpanElement | null) => {
+      const li = node?.closest("li");
+      if (!li) return;
+      li.addEventListener("mouseenter", handleInboxHover);
     },
-    [hasInboxUnread],
+    [handleInboxHover],
+  );
+
+  /** Wrap the inbox label with the unread-Badge while keeping all other labels intact. */
+  const decorateLabel = (item: MenuItem, label: ReactNode): ReactNode => {
+    if (item.id !== "core.inbox" || label == null) return label;
+    return (
+      <span ref={inboxLiRefCallback}>
+        <Badge dot={hasInboxUnread} color={inboxDotColor} offset={[5, 7]}>
+          <span>{label}</span>
+        </Badge>
+      </span>
+    );
+  };
+
+  const getItemClassName = (item: MenuItem) => {
+    if (item.id === "core.inbox" && effectiveShake) {
+      return styles.inboxShake;
+    }
+    return undefined;
+  };
+
+  const agentMenuItems = useMemo(
+    () =>
+      toAntdItems(agentMenu, { collapsed, decorateLabel, getItemClassName }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      agentMenu,
+      collapsed,
+      hasUnreadMessages,
+      hasPendingApprovals,
+      effectiveShake,
+    ],
+  );
+
+  const settingsMenuItems = useMemo(
+    () => toAntdItems(settingsMenu, { collapsed }),
+    [settingsMenu, collapsed],
+  );
+
+  const openKeys = useMemo(
+    () => [...deriveOpenKeys(agentMenu), ...deriveOpenKeys(settingsMenu)],
+    [agentMenu, settingsMenu],
   );
 
   const collapsedNavItems = useMemo(() => {
@@ -357,7 +356,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
               width: 6,
               height: 6,
               borderRadius: "50%",
-              background: "rgba(255, 157, 77, 1)",
+              background: inboxDotColor,
             }}
           />
         )}
@@ -373,7 +372,15 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
         ? { ...entry, icon: decorateInboxIcon(entry.icon) }
         : entry,
     );
-  }, [agentMenu, settingsMenu, routes, chatPath, t, hasInboxUnread]);
+  }, [
+    agentMenu,
+    settingsMenu,
+    routes,
+    chatPath,
+    t,
+    hasInboxUnread,
+    inboxDotColor,
+  ]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -516,11 +523,18 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
                 <button
                   className={`${styles.collapsedNavItem} ${
                     isActive ? styles.collapsedNavItemActive : ""
+                  }${
+                    item.key === "core.inbox" && effectiveShake
+                      ? ` ${styles.inboxShake}`
+                      : ""
                   }`}
                   onClick={() =>
                     item.href
                       ? window.open(item.href, "_blank", "noopener,noreferrer")
                       : navigate(item.path)
+                  }
+                  onMouseEnter={
+                    item.key === "core.inbox" ? handleInboxHover : undefined
                   }
                 >
                   {item.icon}
@@ -546,7 +560,10 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
                     key={entry.key}
                     className={`${styles.simpleNavItem} ${
                       isActive ? styles.simpleNavItemActive : ""
+                    }${
+                      isInbox && effectiveShake ? ` ${styles.inboxShake}` : ""
                     }`}
+                    onMouseEnter={isInbox ? handleInboxHover : undefined}
                     onClick={() =>
                       entry.href
                         ? window.open(
@@ -574,7 +591,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
                               width: 6,
                               height: 6,
                               borderRadius: "50%",
-                              background: "rgba(255, 157, 77, 1)",
+                              background: inboxDotColor,
                             }}
                           />
                         )}
@@ -613,157 +630,27 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
               </button>
             </div>
             <Slot name="sider.top" kind="fill" />
-
-            {/* Agent-scoped menu items from menuRegistry */}
-            {agentMenu.map((item) => {
-              const itemWithChildren = item as MenuItem & { __children?: MenuItem[] };
-              if (itemWithChildren.__children) {
-                const groupId = item.id;
-                const isSectionCollapsed = !!collapsedSections[groupId];
-                const children = itemWithChildren.__children;
-                return (
-                  <div key={groupId} className={styles.navSection}>
-                    <SectionHeader
-                      label={
-                        typeof item.label === "function"
-                          ? String(item.label() ?? "")
-                          : String(item.label ?? "")
-                      }
-                      collapsed={isSectionCollapsed}
-                      onClick={() => toggleSection(groupId)}
-                    />
-                    {!isSectionCollapsed && (
-                      <div className={styles.navSectionItems}>
-                        {children
-                          .filter((c: MenuItem) => c.visible?.() !== false)
-                          .map((child: MenuItem) => (
-                            <button
-                              key={child.id}
-                              className={`${styles.navItem}${
-                                selectedKey === child.id
-                                  ? ` ${styles.navItemActive}`
-                                  : ""
-                              }`}
-                              onClick={() => handleMenuClick(child.id, agentMenu)}
-                            >
-                              <span className={styles.navItemIcon}>
-                                {renderIcon(child.icon, 16)}
-                              </span>
-                              <span className={styles.navItemLabel}>
-                                {typeof child.label === "function"
-                                  ? child.label()
-                                  : child.label}
-                              </span>
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              } else if (item.divider) {
-                return <hr key={item.id} className={styles.navDivider} />;
-              } else {
-                return (
-                  <button
-                    key={item.id}
-                    className={`${styles.navItem}${
-                      selectedKey === item.id ? ` ${styles.navItemActive}` : ""
-                    }`}
-                    onClick={() => handleMenuClick(item.id, agentMenu)}
-                  >
-                    <span className={styles.navItemIcon}>
-                      {renderIcon(item.icon, 16)}
-                      {item.id === "core.inbox" && hasInboxUnread && (
-                        <span className={styles.navItemBadge} />
-                      )}
-                    </span>
-                    <span className={styles.navItemLabel}>
-                      {decorateLabel(
-                        item,
-                        typeof item.label === "function"
-                          ? item.label()
-                          : item.label,
-                      )}
-                    </span>
-                  </button>
-                );
-              }
-            })}
+            <Menu
+              mode="inline"
+              selectedKeys={[selectedKey]}
+              openKeys={openKeys}
+              onClick={({ key }) => handleMenuClick(String(key), agentMenu)}
+              items={agentMenuItems}
+              theme={isDark ? "dark" : "light"}
+              className={styles.sideMenu}
+            />
           </div>
 
-          {/* Global settings section — same visual style as agent section */}
-          <div className={styles.settingsSection}>
-            {settingsMenu.map((item) => {
-              const itemWithChildren = item as MenuItem & { __children?: MenuItem[] };
-              if (itemWithChildren.__children) {
-                const groupId = item.id;
-                const isSectionCollapsed = !!collapsedSections[groupId];
-                const children = itemWithChildren.__children;
-                return (
-                  <div key={groupId} className={styles.navSection}>
-                    <SectionHeader
-                      label={
-                        typeof item.label === "function"
-                          ? String(item.label() ?? "")
-                          : String(item.label ?? "")
-                      }
-                      collapsed={isSectionCollapsed}
-                      onClick={() => toggleSection(groupId)}
-                    />
-                    {!isSectionCollapsed && (
-                      <div className={styles.navSectionItems}>
-                        {children
-                          .filter((c: MenuItem) => c.visible?.() !== false)
-                          .map((child: MenuItem) => (
-                            <button
-                              key={child.id}
-                              className={`${styles.navItem}${
-                                selectedKey === child.id
-                                  ? ` ${styles.navItemActive}`
-                                  : ""
-                              }`}
-                              onClick={() =>
-                                handleMenuClick(child.id, settingsMenu)
-                              }
-                            >
-                              <span className={styles.navItemIcon}>
-                                {renderIcon(child.icon, 16)}
-                              </span>
-                              <span className={styles.navItemLabel}>
-                                {typeof child.label === "function"
-                                  ? child.label()
-                                  : child.label}
-                              </span>
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              } else if (item.divider) {
-                return <hr key={item.id} className={styles.navDivider} />;
-              } else {
-                return (
-                  <button
-                    key={item.id}
-                    className={`${styles.navItem}${
-                      selectedKey === item.id ? ` ${styles.navItemActive}` : ""
-                    }`}
-                    onClick={() => handleMenuClick(item.id, settingsMenu)}
-                  >
-                    <span className={styles.navItemIcon}>
-                      {renderIcon(item.icon, 16)}
-                    </span>
-                    <span className={styles.navItemLabel}>
-                      {typeof item.label === "function"
-                        ? item.label()
-                        : item.label}
-                    </span>
-                  </button>
-                );
-              }
-            })}
-          </div>
+          {/* Global settings section */}
+          <Menu
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            openKeys={openKeys}
+            onClick={({ key }) => handleMenuClick(String(key), settingsMenu)}
+            items={settingsMenuItems}
+            theme={isDark ? "dark" : "light"}
+            className={styles.sideMenu}
+          />
           <Slot name="sider.bottom" kind="fill" />
         </>
       )}
