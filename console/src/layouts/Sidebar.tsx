@@ -329,10 +329,28 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
     [settingsMenu, collapsed],
   );
 
-  const openKeys = useMemo(
-    () => [...deriveOpenKeys(agentMenu), ...deriveOpenKeys(settingsMenu)],
-    [agentMenu, settingsMenu],
-  );
+  // Controlled openKeys: default all groups collapsed, expand on user click.
+  const [openKeys, setOpenKeys] = useState<string[]>([]);
+  const handleOpenChange = useCallback((keys: string[]) => {
+    setOpenKeys(keys);
+  }, []);
+
+  // Auto-expand the group containing the selected key so the active item stays visible.
+  useEffect(() => {
+    const allGroups = [...deriveOpenKeys(agentMenu), ...deriveOpenKeys(settingsMenu)];
+    const parentGroup = allGroups.find((groupId) => {
+      const inAgent = agentMenu.find(
+        (g) => g.id === groupId && (g as MenuItem & { __children?: MenuItem[] }).__children?.some((c) => c.id === selectedKey),
+      );
+      const inSettings = settingsMenu.find(
+        (g) => g.id === groupId && (g as MenuItem & { __children?: MenuItem[] }).__children?.some((c) => c.id === selectedKey),
+      );
+      return inAgent || inSettings;
+    });
+    if (parentGroup && !openKeys.includes(parentGroup)) {
+      setOpenKeys((prev) => [...prev, parentGroup]);
+    }
+  }, [selectedKey, agentMenu, settingsMenu, openKeys]);
 
   const collapsedNavItems = useMemo(() => {
     // Sticky chat is its own carve-out (lives outside menu data — see builtinMenu.ts).
@@ -634,6 +652,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
               mode="inline"
               selectedKeys={[selectedKey]}
               openKeys={openKeys}
+              onOpenChange={handleOpenChange}
               onClick={({ key }) => handleMenuClick(String(key), agentMenu)}
               items={agentMenuItems}
               theme={isDark ? "dark" : "light"}
@@ -646,6 +665,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
             mode="inline"
             selectedKeys={[selectedKey]}
             openKeys={openKeys}
+            onOpenChange={handleOpenChange}
             onClick={({ key }) => handleMenuClick(String(key), settingsMenu)}
             items={settingsMenuItems}
             theme={isDark ? "dark" : "light"}
