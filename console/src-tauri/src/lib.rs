@@ -87,8 +87,19 @@ pub fn run() {
                     }
                     #[cfg(not(target_os = "macos"))]
                     let _ = (&api, &code);
-                    if let Err(err) = tauri::async_runtime::block_on(backend::stop_and_wait(app_handle)) {
-                        log::warn!("[backend] graceful shutdown did not complete: {err}");
+                    // If `quit_app` / tray Quit already started backend shutdown
+                    // via `exit_app`, the async task will (or already did) call
+                    // `stop_and_wait` before `app.exit(0)`. Calling it again here
+                    // via `block_on` would freeze the Tauri event loop for up to
+                    // 60 s, preventing the frontend's `invoke("quit_app")` promise
+                    // from resolving and leaving the UI stuck on its loading
+                    // spinner.
+                    if !tray::shutdown_initiated(app_handle) {
+                        if let Err(err) =
+                            tauri::async_runtime::block_on(backend::stop_and_wait(app_handle))
+                        {
+                            log::warn!("[backend] graceful shutdown did not complete: {err}");
+                        }
                     }
                     computer_use_runtime::stop(app_handle);
                 }

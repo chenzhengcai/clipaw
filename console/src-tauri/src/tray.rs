@@ -1,6 +1,6 @@
 //! System tray integration for the desktop shell.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -41,6 +41,11 @@ pub(crate) struct TrayState {
     close_seq: AtomicU64,
     /// Highest close sequence the frontend has acknowledged.
     close_ack: AtomicU64,
+    /// Set to true once `exit_app` has started backend shutdown, so the
+    /// `ExitRequested` handler knows not to call `block_on(stop_and_wait)`
+    /// again — which would freeze the Tauri event loop and leave the frontend
+    /// stuck in its loading spinner forever.
+    shutdown_initiated: AtomicBool,
 }
 
 /// Creates the tray icon and its cross-platform menu actions.
@@ -198,6 +203,16 @@ fn exit_app(app: &tauri::AppHandle) {
     show_main_window(app);
     let _ = app.emit(SHUTDOWN_STARTED_EVENT, ());
 
+    // Mark shutdown as initiated so the ExitRequested handler does NOT call
+    // block_on(stop_and_wait) a second time. That second call would block the
+    // Tauri event loop for up to 60 s, freezing the IPC channel and leaving
+    // the frontend stuck in its loading spinner (the `invoke("quit_app")`
+    // promise never resolves).
+    {
+        let state = app.state::<TrayState>();
+        state.shutdown_initiated.store(true, Ordering::SeqCst);
+    }
+
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(err) = backend::stop_and_wait(&app).await {
@@ -205,4 +220,12 @@ fn exit_app(app: &tauri::AppHandle) {
         }
         app.exit(0);
     });
+}
+
+/// Returns true if `exit_app` has already started backend shutdown, so the
+/// caller can skip a redundant (and event-loop-blocking) `stop_and_wait`.
+pub(crate) fn shutdown_initiated(app: &tauri::AppHandle) -> bool {
+    app.state::<TrayState>()
+        .shutdown_initiated
+        .load(Ordering::SeqCst)
 }
