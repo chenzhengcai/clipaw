@@ -88,20 +88,25 @@ pub fn run() {
                     #[cfg(not(target_os = "macos"))]
                     let _ = (&api, &code);
                     // If `quit_app` / tray Quit already started backend shutdown
-                    // via `exit_app`, the async task will (or already did) call
-                    // `stop_and_wait` before `app.exit(0)`. Calling it again here
-                    // via `block_on` would freeze the Tauri event loop for up to
-                    // 60 s, preventing the frontend's `invoke("quit_app")` promise
-                    // from resolving and leaving the UI stuck on its loading
-                    // spinner.
+                    // via `exit_app`, a detached OS thread is handling
+                    // `stop_and_wait`, `computer_use_runtime::stop`, and will
+                    // call `app.exit(0)` itself when done. We must join that
+                    // thread here so the process does not call `process::exit()`
+                    // (which kills all threads) before cleanup finishes. The
+                    // window is already hidden, so the user does not see this
+                    // wait. If the join times out (thread hung), we abandon it
+                    // and let the process exit - `backend_guard` reaps orphans
+                    // on next launch.
                     if !tray::shutdown_initiated(app_handle) {
                         if let Err(err) =
                             tauri::async_runtime::block_on(backend::stop_and_wait(app_handle))
                         {
                             log::warn!("[backend] graceful shutdown did not complete: {err}");
                         }
+                        computer_use_runtime::stop(app_handle);
+                    } else {
+                        tray::join_shutdown_thread(app_handle);
                     }
-                    computer_use_runtime::stop(app_handle);
                 }
                 // macOS emits this when the user clicks the Dock icon. Without
                 // it, a window hidden via "minimize to tray" can only be

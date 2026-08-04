@@ -46,6 +46,11 @@ pub(crate) struct TrayState {
     /// again — which would freeze the Tauri event loop and leave the frontend
     /// stuck in its loading spinner forever.
     shutdown_initiated: AtomicBool,
+    /// Join handle for the detached shutdown thread. Stored so the process
+    /// does not exit (killing the thread mid-cleanup) before the sidecar has
+    /// been stopped. The `ExitRequested` handler joins this before letting
+    /// the process exit.
+    shutdown_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 /// Creates the tray icon and its cross-platform menu actions.
@@ -197,6 +202,17 @@ pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Maximum time the detached shutdown thread waits for the backend sidecar to
+/// exit gracefully before letting the desktop window close. The window must not
+/// stay visible (and the frontend spinner spinning) for the full 60 s
+/// `GRACEFUL_SHUTDOWN_EXIT_TIMEOUT`, because on Windows the backend lifespan
+/// `finally` block can spend several minutes in sandbox ACL cleanup
+/// (`icacls` / `net user` / `powershell`, each with its own 30 s subprocess
+/// timeout). The detached thread keeps running after `app.exit(0)`, and the
+/// backend's own `backend_guard.reconcile_singleton_backend` reaps any orphan
+/// on the next launch if this thread is itself killed.
+const SHUTDOWN_DETACH_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn exit_app(app: &tauri::AppHandle) {
     // Keep a visible, non-interactive status while the sidecar finishes its
     // bounded shutdown. This also gives tray-only exits an explicit status.
@@ -204,22 +220,107 @@ fn exit_app(app: &tauri::AppHandle) {
     let _ = app.emit(SHUTDOWN_STARTED_EVENT, ());
 
     // Mark shutdown as initiated so the ExitRequested handler does NOT call
-    // block_on(stop_and_wait) a second time. That second call would block the
-    // Tauri event loop for up to 60 s, freezing the IPC channel and leaving
-    // the frontend stuck in its loading spinner (the `invoke("quit_app")`
-    // promise never resolves).
+    // block_on(stop_and_wait) or computer_use_runtime::stop - both would block
+    // the Tauri event loop and freeze the frontend's `invoke("quit_app")`
+    // promise. The detached thread below owns all cleanup.
     {
         let state = app.state::<TrayState>();
         state.shutdown_initiated.store(true, Ordering::SeqCst);
     }
 
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(err) = backend::stop_and_wait(&app).await {
-            log::warn!("[backend] graceful shutdown did not complete: {err}");
+    // Spawn an OS thread (not a Tauri async task) so backend cleanup runs
+    // outside the Tauri event loop. The thread does a bounded graceful
+    // shutdown then force-kills any survivor, and finally calls
+    // `app.exit(0)` itself - we must NOT call `app.exit(0)` on the main
+    // thread here because Tauri v2's `exit()` ultimately calls
+    // `process::exit()`, which terminates *all* threads including this one
+    // before cleanup finishes. The window is hidden immediately so the user
+    // never waits; the process stays alive just long enough for the thread
+    // to finish, because the `ExitRequested` handler joins it.
+    let app_for_thread = app.clone();
+    let spawn_result = std::thread::Builder::new()
+        .name("qwenpaw-backend-shutdown".to_string())
+        .spawn(move || {
+            // Stop the Computer Use helper first - it is an independent native
+            // process whose cleanup is cheap and must not be skipped.
+            crate::computer_use_runtime::stop(&app_for_thread);
+
+            // Try a graceful backend shutdown with a bounded timeout. We use a
+            // dedicated tokio runtime (not `tauri::async_runtime::handle`)
+            // because the Tauri runtime may be tearing down after `app.exit(0)`
+            // was called on the main thread. The dedicated runtime stays alive
+            // as long as this OS thread owns it.
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    log::error!("[backend] failed to build shutdown runtime: {err}");
+                    backend::force_kill_sidecar(&app_for_thread);
+                    app_for_thread.exit(0);
+                    return;
+                }
+            };
+            let result = runtime.block_on(async {
+                tokio::time::timeout(
+                    SHUTDOWN_DETACH_TIMEOUT,
+                    backend::stop_and_wait(&app_for_thread),
+                )
+                .await
+            });
+
+            match result {
+                Ok(Ok(())) => {
+                    log::info!("[backend] graceful shutdown completed in background");
+                }
+                Ok(Err(err)) => {
+                    log::warn!("[backend] graceful shutdown error in background: {err}");
+                }
+                Err(_) => {
+                    log::warn!(
+                        "[backend] graceful shutdown did not finish in {} s; force-killing \
+                         (orphan reaped on next launch by backend_guard)",
+                        SHUTDOWN_DETACH_TIMEOUT.as_secs()
+                    );
+                    // Force-kill the sidecar process tree directly so it does
+                    // not linger after the desktop exits. We bypass
+                    // `stop_and_wait` here because its internal 60 s graceful
+                    // timeout is too long; `force_kill_sidecar` sends
+                    // SIGKILL/TerminateProcess and, on macOS, reaps the
+                    // process tree.
+                    backend::force_kill_sidecar(&app_for_thread);
+                }
+            }
+
+            // Now that cleanup is done, trigger the actual process exit. This
+            // fires `ExitRequested`, whose handler joins this very thread
+            // (already returning) and lets the process terminate.
+            app_for_thread.exit(0);
+        });
+
+    match spawn_result {
+        Ok(handle) => {
+            // Store the handle so `ExitRequested` can join it before letting
+            // the process exit, ensuring the thread is not killed mid-cleanup.
+            if let Ok(mut guard) = app.state::<TrayState>().shutdown_thread.lock() {
+                *guard = Some(handle);
+            }
         }
-        app.exit(0);
-    });
+        Err(err) => {
+            log::error!("[backend] failed to spawn shutdown thread: {err}");
+            // Fallback: best-effort inline kill, then exit immediately. The
+            // backend_guard will clean up any orphan on next launch.
+            backend::force_kill_sidecar(app);
+            app.exit(0);
+            return;
+        }
+    }
+
+    // Hide the window immediately so the user does not wait for backend
+    // cleanup. We do NOT call `app.exit(0)` here - the detached thread does
+    // that after cleanup, and the `ExitRequested` handler joins it.
+    hide_main_window(app);
 }
 
 /// Returns true if `exit_app` has already started backend shutdown, so the
@@ -228,4 +329,54 @@ pub(crate) fn shutdown_initiated(app: &tauri::AppHandle) -> bool {
     app.state::<TrayState>()
         .shutdown_initiated
         .load(Ordering::SeqCst)
+}
+
+/// Joins the detached shutdown thread so the process does not exit (killing
+/// the thread mid-cleanup) before the sidecar has been stopped. Called from
+/// the `ExitRequested` handler when `shutdown_initiated` is true. The window
+/// is already hidden by then, so the user does not see this wait.
+///
+/// If the join times out (e.g. the thread is hung in an unbounded
+/// `child.wait()`), we abandon it and let the process exit; the
+/// `backend_guard` reaps any orphan on the next launch.
+pub(crate) fn join_shutdown_thread(app: &tauri::AppHandle) {
+    let handle = {
+        let state = app.state::<TrayState>();
+        let mut guard = match state.shutdown_thread.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                log::warn!("[backend] shutdown thread state poisoned; skipping join");
+                return;
+            }
+        };
+        guard.take()
+    };
+
+    if let Some(handle) = handle {
+        // The thread's own `stop_and_wait` is bounded by
+        // `SHUTDOWN_DETACH_TIMEOUT` (10 s) plus `force_kill_sidecar`, so we
+        // poll with a generous budget. `JoinHandle` has no native
+        // `join_timeout`, so we use `is_finished` + sleep, then a final
+        // blocking `join`.
+        let deadline = SHUTDOWN_DETACH_TIMEOUT * 2;
+        let poll_interval = Duration::from_millis(100);
+        let start = std::time::Instant::now();
+        while !handle.is_finished() && start.elapsed() < deadline {
+            std::thread::sleep(poll_interval);
+        }
+        if handle.is_finished() {
+            match handle.join() {
+                Ok(()) => log::info!("[backend] shutdown thread joined cleanly"),
+                Err(_) => log::warn!("[backend] shutdown thread panicked"),
+            }
+        } else {
+            // Thread is still running past the deadline. Abandon it so the
+            // process can exit; force-kill as a last resort.
+            log::warn!("[backend] shutdown thread did not finish within join timeout; abandoning");
+            backend::force_kill_sidecar(app);
+            // Drop the handle without joining - the thread will be killed when
+            // the process exits.
+            drop(handle);
+        }
+    }
 }

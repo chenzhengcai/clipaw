@@ -338,6 +338,46 @@ pub(crate) async fn stop_and_wait(app: &tauri::AppHandle) -> Result<(), String> 
     app.state::<BackendState>().stop_and_wait().await
 }
 
+/// Force-kills the sidecar process tree immediately, bypassing the graceful
+/// HTTP shutdown. Used by the detached exit thread when the bounded graceful
+/// wait elapses, so the sidecar (and, on macOS, its child processes) do not
+/// linger as orphans after the desktop window closes.
+///
+/// On macOS the sidecar's browser-worker children (Chrome/Playwright) are
+/// independent processes that survive a bare `child.kill()`. We walk the
+/// process tree with `pgrep`/`kill` to reap them. On Windows the Job Object
+/// assigned to the Computer Use helper already reaps that subtree; the
+/// sidecar's own children are cleaned up by the backend lifespan, so here we
+/// only kill the recorded sidecar child.
+pub(crate) fn force_kill_sidecar(app: &tauri::AppHandle) {
+    let state = app.state::<BackendState>();
+    let pid = state.with_inner(|inner| inner.child.as_ref().map(|child| child.pid()));
+
+    // On macOS, collect the process tree *before* killing the root. Once the
+    // root exits, its children are re-parented to launchd (PID 1) and
+    // `pgrep -P <root>` returns nothing, so the browser-worker orphans we are
+    // trying to reap would be missed. We SIGTERM the descendants first, kill
+    // the root, then SIGKILL any survivors.
+    #[cfg(target_os = "macos")]
+    let descendants = pid.map(kill_process_tree_macos).unwrap_or_default();
+
+    state.force_kill();
+    // Reset the full backend state (not just the child handle) so a subsequent
+    // `restart_backend` does not hit `StopPlan::Wait` on a stale `terminated`
+    // receiver left behind by an interrupted `stop_and_wait`.
+    state.finish_stop();
+
+    // Reap survivors that were collected before the root was killed.
+    #[cfg(target_os = "macos")]
+    {
+        for child_pid in &descendants {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &child_pid.to_string()])
+                .output();
+        }
+    }
+}
+
 fn desktop_log_level() -> log::LevelFilter {
     if std::env::var("QWENPAW_DESKTOP_DEBUG").is_ok_and(|value| {
         matches!(
@@ -392,4 +432,73 @@ fn start(app: &tauri::AppHandle) {
         inner.stopping = false;
     });
     events::watch(app.clone(), generation, rx, terminated_sender);
+}
+
+/// Collects and SIGTERMs the process tree rooted at `root_pid` on macOS,
+/// returning the collected descendant PIDs so the caller can SIGKILL any
+/// survivors after killing the root.
+///
+/// The Tauri shell spawns the Python sidecar as an independent process. When
+/// the sidecar is force-killed, its child processes (Chrome/Playwright browser
+/// workers spawned by the backend) are orphaned and keep running because macOS
+/// does not link child lifetime to parent. This walks the tree with `pgrep -P`
+/// and sends SIGTERM to every descendant, so the user does not end up with
+/// ghost `qwenpaw-backend` / Chrome processes after quitting.
+///
+/// Must be called *before* killing `root_pid`, because macOS re-parents
+/// orphans to launchd (PID 1) once the root exits, making `pgrep -P` return
+/// nothing.
+#[cfg(target_os = "macos")]
+fn kill_process_tree_macos(root_pid: u32) -> Vec<u32> {
+    use std::collections::HashSet;
+    use std::process::Command;
+
+    /// Recursively collect all descendant PIDs of `pid` via `pgrep -P`.
+    /// A `visited` set guards against cycles and duplicate entries from
+    /// shared-parent processes.
+    fn collect_descendants(pid: u32, visited: &mut HashSet<u32>) -> Vec<u32> {
+        let output = match Command::new("pgrep")
+            .args(["-P", &pid.to_string()])
+            .output()
+        {
+            Ok(output) => output,
+            Err(err) => {
+                log::debug!("[backend] pgrep -P {pid} failed: {err}");
+                return Vec::new();
+            }
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let children: Vec<u32> = text
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .filter(|child| visited.insert(*child))
+            .collect();
+        let mut all = Vec::new();
+        for child in children {
+            all.extend(collect_descendants(child, visited));
+            all.push(child);
+        }
+        all
+    }
+
+    let mut visited = HashSet::new();
+    let descendants = collect_descendants(root_pid, &mut visited);
+    if descendants.is_empty() {
+        return Vec::new();
+    }
+
+    log::info!(
+        "[backend] SIGTERM {} descendant process(es) on macOS",
+        descendants.len()
+    );
+
+    // SIGTERM descendants so they can flush state; the caller SIGKILLs
+    // survivors after killing the root.
+    for pid in &descendants {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .output();
+    }
+
+    descendants
 }
