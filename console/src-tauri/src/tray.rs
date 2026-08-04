@@ -213,20 +213,30 @@ pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
 /// on the next launch if this thread is itself killed.
 const SHUTDOWN_DETACH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Maximum time the synchronous `RunEvent::Exit` cleanup waits for the backend
+/// sidecar before force-killing it. macOS's `applicationWillTerminate` (which
+/// produces `RunEvent::Exit` on Cmd+Q) should return promptly, so this is
+/// shorter than the detached thread's 10 s budget.
+const EXIT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub(crate) fn exit_app(app: &tauri::AppHandle) {
+    // Idempotent guard. `exit_app` can be reached from several sources that
+    // race or repeat once `prevent_exit` keeps the process alive on macOS
+    // Cmd+Q: a second Cmd+Q, the tray Quit menu, or the frontend `quit_app`
+    // command. The first call atomically claims shutdown; later calls return
+    // immediately so we never spawn a second shutdown thread or re-show the
+    // already-hidden window.
+    {
+        let state = app.state::<TrayState>();
+        if state.shutdown_initiated.swap(true, Ordering::SeqCst) {
+            return;
+        }
+    }
+
     // Keep a visible, non-interactive status while the sidecar finishes its
     // bounded shutdown. This also gives tray-only exits an explicit status.
     show_main_window(app);
     let _ = app.emit(SHUTDOWN_STARTED_EVENT, ());
-
-    // Mark shutdown as initiated so the ExitRequested handler does NOT call
-    // block_on(stop_and_wait) or computer_use_runtime::stop - both would block
-    // the Tauri event loop and freeze the frontend's `invoke("quit_app")`
-    // promise. The detached thread below owns all cleanup.
-    {
-        let state = app.state::<TrayState>();
-        state.shutdown_initiated.store(true, Ordering::SeqCst);
-    }
 
     // Spawn an OS thread (not a Tauri async task) so backend cleanup runs
     // outside the Tauri event loop. The thread does a bounded graceful
@@ -385,4 +395,58 @@ pub(crate) fn join_shutdown_thread(app: &tauri::AppHandle) {
             drop(handle);
         }
     }
+}
+
+
+/// Synchronous backend cleanup for OS-initiated exits that bypass
+/// `ExitRequested`.
+///
+/// On macOS, Cmd+Q / app-menu Quit goes through `applicationWillTerminate`
+/// -> `Event::LoopDestroyed` -> `RunEvent::Exit`, **not** through
+/// `RunEvent::ExitRequested`. The `ExitRequested` handler (where all the
+/// detached-thread logic lives) therefore never runs for Cmd+Q, and the
+/// process would exit immediately - killing any detached shutdown thread and
+/// orphaning the backend sidecar (reparented to launchd, PPID 1). This is the
+/// last synchronous chance to stop the sidecar before the process exits.
+pub(crate) fn exit_cleanup_blocking(app: &tauri::AppHandle) {
+    if shutdown_initiated(app) {
+        // `exit_app` already spawned a detached shutdown thread; join it so
+        // its cleanup finishes before the process exits. The thread calls
+        // `std::process::exit(0)` itself when done (terminating the process),
+        // so reaching here means it is still running.
+        join_shutdown_thread(app);
+        return;
+    }
+
+    // No prior shutdown was initiated (e.g. direct macOS Cmd+Q). Clean up
+    // inline with a bounded timeout, then force-kill the process tree.
+    log::info!("[backend] RunEvent::Exit: synchronous backend cleanup");
+    crate::computer_use_runtime::stop(app);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build();
+    match runtime {
+        Ok(rt) => {
+            let result = rt.block_on(async {
+                tokio::time::timeout(EXIT_CLEANUP_TIMEOUT, backend::stop_and_wait(app)).await
+            });
+            match result {
+                Ok(Ok(())) => log::info!("[backend] graceful shutdown completed on Exit"),
+                Ok(Err(err)) => {
+                    log::warn!("[backend] graceful shutdown error on Exit: {err}")
+                }
+                Err(_) => log::warn!(
+                    "[backend] graceful shutdown timed out on Exit after {} s; force-killing",
+                    EXIT_CLEANUP_TIMEOUT.as_secs()
+                ),
+            }
+        }
+        Err(err) => {
+            log::error!("[backend] failed to build Exit cleanup runtime: {err}");
+        }
+    }
+
+    // Always force-kill to reap any survivor and its child process tree.
+    backend::force_kill_sidecar(app);
 }

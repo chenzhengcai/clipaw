@@ -76,22 +76,25 @@ pub fn run() {
                 // unresponsive after the Cmd+Q signal. Programmatic exits from
                 // `quit_app` carry a `code` and fall through to the normal
                 // shutdown path below.
-                RunEvent::ExitRequested { code, .. } => {
+                RunEvent::ExitRequested { api, code, .. } => {
                     #[cfg(target_os = "macos")]
                     if code.is_none() {
-                        // macOS Cmd+Q / app menu Quit. We used to route this
-                        // through `prevent_exit` + `request_close` to show the
-                        // close prompt, but the frontend WebView can become
-                        // unresponsive after macOS's Cmd+Q signal, leaving the
-                        // `CLOSE_REQUESTED_EVENT` unhandled and the backend
-                        // orphaned. Instead, exit directly via `exit_app` -
-                        // same path as the X button / tray Quit - so the
-                        // detached shutdown thread always runs.
+                        // macOS Cmd+Q / app menu Quit. We MUST prevent the OS
+                        // from terminating the app here, otherwise the detached
+                        // shutdown thread spawned by `exit_app` is killed
+                        // before it can stop the backend sidecar, leaving
+                        // `qwenpaw-backend` orphaned (reparented to launchd,
+                        // PPID 1). `exit_app` hides the window at once and its
+                        // shutdown thread calls `std::process::exit(0)` once
+                        // the sidecar is stopped, so preventing the exit only
+                        // keeps the process alive long enough for cleanup -
+                        // the window still vanishes immediately.
+                        api.prevent_exit();
                         tray::exit_app(app_handle);
                         return;
                     }
                     #[cfg(not(target_os = "macos"))]
-                    let _ = code;
+                    let _ = (&api, &code);
                     // If `quit_app` / tray Quit already started backend shutdown
                     // via `exit_app`, a detached OS thread is handling
                     // `stop_and_wait`, `computer_use_runtime::stop`, and will
@@ -119,6 +122,15 @@ pub fn run() {
                 #[cfg(target_os = "macos")]
                 RunEvent::Reopen { .. } => {
                     tray::show_main_window(app_handle);
+                }
+                RunEvent::Exit => {
+                    // macOS Cmd+Q / app-menu Quit reaches here (via
+                    // `applicationWillTerminate` -> `LoopDestroyed`), NOT
+                    // through `ExitRequested`. This is the last synchronous
+                    // chance to stop the backend sidecar before the process
+                    // exits and orphans it. Without this, the detached
+                    // shutdown thread is killed mid-cleanup.
+                    tray::exit_cleanup_blocking(app_handle);
                 }
                 _ => {}
             });
