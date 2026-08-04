@@ -258,8 +258,8 @@ fn exit_app(app: &tauri::AppHandle) {
                 Err(err) => {
                     log::error!("[backend] failed to build shutdown runtime: {err}");
                     backend::force_kill_sidecar(&app_for_thread);
-                    app_for_thread.exit(0);
-                    return;
+                    log::logger().flush();
+                    std::process::exit(0);
                 }
             };
             let result = runtime.block_on(async {
@@ -293,10 +293,16 @@ fn exit_app(app: &tauri::AppHandle) {
                 }
             }
 
-            // Now that cleanup is done, trigger the actual process exit. This
-            // fires `ExitRequested`, whose handler joins this very thread
-            // (already returning) and lets the process terminate.
-            app_for_thread.exit(0);
+            // Now that cleanup is done, exit the process directly. We use
+            // `std::process::exit` instead of `app.exit(0)` because the latter
+            // fires `ExitRequested`, whose handler would call
+            // `join_shutdown_thread` - waiting for *this* thread to finish -
+            // while this thread is blocked waiting for `exit(0)` to return.
+            // That is a deadlock. `std::process::exit(0)` terminates the
+            // process immediately, killing any remaining threads (there should
+            // be none besides this one by now).
+            log::logger().flush();
+            std::process::exit(0);
         });
 
     match spawn_result {
@@ -312,8 +318,8 @@ fn exit_app(app: &tauri::AppHandle) {
             // Fallback: best-effort inline kill, then exit immediately. The
             // backend_guard will clean up any orphan on next launch.
             backend::force_kill_sidecar(app);
-            app.exit(0);
-            return;
+            log::logger().flush();
+            std::process::exit(0);
         }
     }
 

@@ -90,13 +90,13 @@ pub fn run() {
                     // If `quit_app` / tray Quit already started backend shutdown
                     // via `exit_app`, a detached OS thread is handling
                     // `stop_and_wait`, `computer_use_runtime::stop`, and will
-                    // call `app.exit(0)` itself when done. We must join that
-                    // thread here so the process does not call `process::exit()`
-                    // (which kills all threads) before cleanup finishes. The
-                    // window is already hidden, so the user does not see this
-                    // wait. If the join times out (thread hung), we abandon it
-                    // and let the process exit - `backend_guard` reaps orphans
-                    // on next launch.
+                    // call `std::process::exit(0)` itself when done (bypassing
+                    // `ExitRequested` to avoid a join deadlock). This branch is
+                    // only reached if an external `ExitRequested` fires while
+                    // the thread is still running (e.g. macOS second Cmd+Q or
+                    // system logout). We join the thread so the process does
+                    // not exit mid-cleanup; if the join times out, we abandon
+                    // it and let the process exit.
                     if !tray::shutdown_initiated(app_handle) {
                         if let Err(err) =
                             tauri::async_runtime::block_on(backend::stop_and_wait(app_handle))
