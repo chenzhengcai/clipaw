@@ -213,7 +213,7 @@ pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
 /// on the next launch if this thread is itself killed.
 const SHUTDOWN_DETACH_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn exit_app(app: &tauri::AppHandle) {
+pub(crate) fn exit_app(app: &tauri::AppHandle) {
     // Keep a visible, non-interactive status while the sidecar finishes its
     // bounded shutdown. This also gives tray-only exits an explicit status.
     show_main_window(app);

@@ -70,23 +70,28 @@ pub fn run() {
         Ok(app) => {
             app.run(|app_handle, event| match event {
                 // `code` is `None` only for OS-initiated quits (e.g. macOS
-                // Cmd+Q / app menu Quit). On macOS we route those through the
-                // same close prompt as the window's red button, so the choice
-                // (minimize-to-tray vs. quit) stays consistent with Windows
-                // Alt+F4. Programmatic exits from `quit_app` carry a `code` and
-                // fall through to the normal shutdown path below.
-                RunEvent::ExitRequested { api, code, .. } => {
+                // Cmd+Q / app menu Quit). On macOS we call `exit_app` directly
+                // (same as the X button / tray Quit) so the detached shutdown
+                // thread always runs, even if the frontend WebView is
+                // unresponsive after the Cmd+Q signal. Programmatic exits from
+                // `quit_app` carry a `code` and fall through to the normal
+                // shutdown path below.
+                RunEvent::ExitRequested { code, .. } => {
                     #[cfg(target_os = "macos")]
                     if code.is_none() {
-                        api.prevent_exit();
-                        // The window may be hidden in the tray; bring it back so
-                        // the close prompt is actually visible before asking.
-                        tray::show_main_window(app_handle);
-                        tray::request_close(app_handle);
+                        // macOS Cmd+Q / app menu Quit. We used to route this
+                        // through `prevent_exit` + `request_close` to show the
+                        // close prompt, but the frontend WebView can become
+                        // unresponsive after macOS's Cmd+Q signal, leaving the
+                        // `CLOSE_REQUESTED_EVENT` unhandled and the backend
+                        // orphaned. Instead, exit directly via `exit_app` -
+                        // same path as the X button / tray Quit - so the
+                        // detached shutdown thread always runs.
+                        tray::exit_app(app_handle);
                         return;
                     }
                     #[cfg(not(target_os = "macos"))]
-                    let _ = (&api, &code);
+                    let _ = code;
                     // If `quit_app` / tray Quit already started backend shutdown
                     // via `exit_app`, a detached OS thread is handling
                     // `stop_and_wait`, `computer_use_runtime::stop`, and will
