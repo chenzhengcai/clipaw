@@ -17,7 +17,7 @@ import {
 import { languageApi } from "../api/modules/language";
 import { useTheme, type ThemeMode } from "../contexts/ThemeContext";
 import { useSidebarModeStore } from "../stores/sidebarModeStore";
-import { isTauriRuntime } from "../tauri/backendRuntime";
+import { isTauriRuntime, withCacheBuster, withDesktopMarker } from "../tauri/backendRuntime";
 import {
   clearRememberedCloseAction,
   getRememberedCloseAction,
@@ -207,7 +207,13 @@ export default function SidebarSettingsPanel({
             className={`${styles.optBtn} ${styles.optBtnBlock} ${styles.desktopModeBtn}`}
             onClick={() => {
               onClose?.();
-              window.location.assign(getOsRootHref(window.location.pathname));
+              window.location.assign(
+                withCacheBuster(
+                  withDesktopMarker(
+                    getOsRootHref(window.location.pathname),
+                  ),
+                ),
+              );
             }}
           >
             <Monitor size={14} />

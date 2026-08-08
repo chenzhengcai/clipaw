@@ -217,7 +217,7 @@ const SHUTDOWN_DETACH_TIMEOUT: Duration = Duration::from_secs(10);
 /// sidecar before force-killing it. macOS's `applicationWillTerminate` (which
 /// produces `RunEvent::Exit` on Cmd+Q) should return promptly, so this is
 /// shorter than the detached thread's 10 s budget.
-const EXIT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+const EXIT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(crate) fn exit_app(app: &tauri::AppHandle) {
     // Idempotent guard. `exit_app` can be reached from several sources that
@@ -409,6 +409,13 @@ pub(crate) fn join_shutdown_thread(app: &tauri::AppHandle) {
 /// orphaning the backend sidecar (reparented to launchd, PPID 1). This is the
 /// last synchronous chance to stop the sidecar before the process exits.
 pub(crate) fn exit_cleanup_blocking(app: &tauri::AppHandle) {
+    // Hide the window immediately so the user does not see the UI freeze
+    // while we synchronously wait for the backend sidecar to shut down.
+    // macOS Cmd+Q reaches here via `applicationWillTerminate`, which blocks
+    // the main thread during cleanup; without hiding, the window would
+    // appear frozen for 1-2 s.
+    hide_main_window(app);
+
     if shutdown_initiated(app) {
         // `exit_app` already spawned a detached shutdown thread; join it so
         // its cleanup finishes before the process exits. The thread calls
