@@ -19,7 +19,7 @@ venv:
 .PHONY: build-console
 build-console:
 	@echo "=== 构建前端控制台 ==="
-	cd console && npm ci && npm run build
+	cd console && npm install && npm run build
 	@echo "=== 复制构建产物到 src/qwenpaw/console/ ==="
 	mkdir -p src/qwenpaw/console
 	cp -R console/dist/. src/qwenpaw/console/
