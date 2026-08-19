@@ -96,6 +96,7 @@
     fitFill: { zh: "拉伸", en: "Stretch" },
     dim: { zh: "遮罩浓度", en: "Dim" },
     blur: { zh: "背景模糊", en: "Blur" },
+    opacity: { zh: "背景透明度", en: "Opacity" },
     delete: { zh: "删除", en: "Delete" },
     deleteConfirm: {
       zh: "删除这个背景文件?使用它的位置会被清除。",
@@ -104,6 +105,14 @@
     deleted: { zh: "已删除", en: "Deleted" },
     image: { zh: "图片", en: "Image" },
     video: { zh: "视频", en: "Video" },
+    color: { zh: "纯色", en: "Solid" },
+    colorSection: { zh: "纯色背景", en: "Solid Color" },
+    colorPresets: { zh: "推荐色", en: "Suggested" },
+    colorCustom: { zh: "自定义颜色", en: "Custom" },
+    colorHint: {
+      zh: "点击推荐色或自定义颜色,立即设为聊天背景。",
+      en: "Pick a suggested color or any RGB value to apply instantly.",
+    },
     loadFail: {
       zh: "背景服务加载失败,请确认插件已启用。",
       en: "Background service unavailable - check the plugin is enabled.",
@@ -147,8 +156,21 @@
     });
   }
 
-  /** Backend returns URLs already prefixed with /api - attach the base. */
-  const mediaUrl = (u) => (u ? (host.apiBaseUrl || "") + u : u);
+  /**
+   * Backend returns /api-prefixed media URLs served by the plugin's own
+   * auth-protected router. <img>/<video> cannot send an Authorization
+   * header, so append the token as a query param (Console auth supports
+   * `?token=`).
+   */
+  const mediaUrl = (u) => {
+    if (!u) return u;
+    let url = (host.apiBaseUrl || "") + u;
+    const token = host.getApiToken ? host.getApiToken() : "";
+    if (token) {
+      url += (url.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(token);
+    }
+    return url;
+  };
 
   const getConfig = () => apiFetch(`/${PLUGIN_ID}/config`);
   const putConfig = (slot, background) =>
@@ -259,8 +281,25 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
     document.head.appendChild(el);
   }
 
-  /** Create (or reuse) an <img>/<video> element for a background spec. */
+  /** Create (or reuse) an <img>/<video>/solid-color element for a spec. */
   function buildMediaEl(spec, existing) {
+    // Solid color: a plain colored div (no media file, no blur/fit).
+    if (spec.type === "color") {
+      let el = existing;
+      if (
+        !el ||
+        el.tagName.toLowerCase() !== "div" ||
+        !el.classList.contains("qwp-bg-color") ||
+        el.getAttribute("data-bg-color") !== (spec.color || "")
+      ) {
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+        el = document.createElement("div");
+        el.className = "qwp-bg-media qwp-bg-color";
+        el.setAttribute("data-bg-color", spec.color || "");
+      }
+      el.style.background = spec.color || "#ffffff";
+      return el;
+    }
     const url = mediaUrl(spec.url);
     const tag = spec.type === "video" ? "video" : "img";
     let el = existing;
@@ -292,16 +331,25 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
     return el;
   }
 
-  /** Fill a layer div (media + dim overlay) from a spec. */
+  /** Fill a layer div (media + optional dim overlay) from a spec. */
   function fillLayer(layer, spec) {
     layer.style.setProperty("--qwp-fit", spec.fit || "cover");
     layer.style.setProperty(
       "--qwp-dim",
       String(spec.dim == null ? 0.35 : spec.dim),
     );
+    // Background transparency: 1 = fully opaque, <1 lets the surface below
+    // (global background / page) show through.
+    layer.style.opacity = String(spec.opacity == null ? 1 : spec.opacity);
     const media = layer.querySelector(".qwp-bg-media");
     const next = buildMediaEl(spec, media);
     if (!next.parentNode) layer.insertBefore(next, layer.firstChild);
+    if (spec.type === "color") {
+      // Solid color: render exactly what was picked - no dim overlay.
+      const ov = layer.querySelector(".qwp-bg-overlay");
+      if (ov) ov.parentNode.removeChild(ov);
+      return;
+    }
     let overlay = layer.querySelector(".qwp-bg-overlay");
     if (!overlay) {
       overlay = document.createElement("div");
@@ -327,7 +375,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
     const html = document.documentElement;
     const body = document.body;
     const existing = document.getElementById(GLOBAL_LAYER_ID);
-    if (!spec || !spec.type || !spec.url) {
+    if (!spec || !spec.type || (!spec.url && spec.type !== "color")) {
       html.classList.remove("qwp-bg-global-on");
       body.classList.remove("qwp-bg-global-on");
       if (existing) {
@@ -356,7 +404,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
 
   function applyChatToHost(node, spec) {
     const layer = node.querySelector(`:scope > .${CHAT_LAYER_CLASS}`);
-    if (!spec || !spec.type || !spec.url) {
+    if (!spec || !spec.type || (!spec.url && spec.type !== "color")) {
       node.classList.remove("qwp-chat-bg-on");
       if (layer) {
         clearLayer(layer);
@@ -445,7 +493,17 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
 
   // ── Settings page ──────────────────────────────────────────────────────
 
-  const { Card, Button, Select, Slider, Popconfirm, Spin, Empty, Tag, Alert, Upload, Switch, message } = antd;
+  const { Card, Button, Select, Slider, Popconfirm, Spin, Empty, Tag, Alert, Upload, Switch, ColorPicker, message } = antd;
+
+  // 5 suggested solid colors - soft, elegant tones that keep chat text
+  // readable (light neutrals: cream / misty blue-grey / sage / blush / oat).
+  const PRESET_COLORS = [
+    "#F7F3EE", // 奶油白 cream
+    "#E4E9EC", // 雾灰蓝 misty blue-grey
+    "#DEE5DA", // 鼠尾草绿 sage
+    "#F4EAE3", // 杏粉 blush
+    "#E8E0D4", // 燕麦米 oat
+  ];
   const {
     UploadOutlined,
     DeleteOutlined,
@@ -460,6 +518,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
 
   /** Live preview box for one slot. */
   function PreviewBox({ spec }) {
+    const hasBg = spec && (spec.url || spec.type === "color");
     const boxStyle = {
       position: "relative",
       width: "100%",
@@ -467,12 +526,13 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
       borderRadius: 10,
       overflow: "hidden",
       border: "1px solid rgba(128,128,128,0.25)",
-      background: spec && spec.url ? "#000" : "rgba(128,128,128,0.08)",
+      background: spec && spec.type === "color" ? spec.color : "#000",
+      opacity: spec && spec.opacity != null ? spec.opacity : 1,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
     };
-    if (!spec || !spec.url) {
+    if (!hasBg) {
       return h(
         "div",
         { style: boxStyle },
@@ -480,6 +540,29 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
           "div",
           { style: { color: "rgba(128,128,128,0.7)", fontSize: 13 } },
           t("notSet"),
+        ),
+      );
+    }
+    if (spec.type === "color") {
+      return h(
+        "div",
+        { style: boxStyle },
+        h(
+          "div",
+          {
+            style: {
+              position: "absolute",
+              left: 10,
+              bottom: 8,
+              fontSize: 12,
+              fontFamily: "monospace",
+              color: "rgba(255,255,255,0.85)",
+              background: "rgba(0,0,0,0.35)",
+              padding: "2px 8px",
+              borderRadius: 6,
+            },
+          },
+          spec.color,
         ),
       );
     }
@@ -638,10 +721,15 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
   }
 
   /** Card for one slot: preview + options + upload + clear + library. */
-  function SlotCard({ slot, config, library, uploading, onApply, onOption, onUpload, onDelete }) {
+  function SlotCard({ slot, config, library, uploading, onApply, onOption, onUpload, onDelete, onColor }) {
     const spec = config && config.slots && config.slots[slot];
     const activeFile = spec && spec.file;
-    const disabled = !spec || !spec.type;
+    // fit/dim/blur only apply to image/video - disabled for solid color.
+    const disabled = !spec || !spec.type || spec.type === "color";
+    // opacity works for every kind (image/video/solid color).
+    const noBg = !spec || !spec.type;
+    const isSolid = spec && spec.type === "color";
+    const opacityPct = spec ? Math.round((spec.opacity == null ? 1 : spec.opacity) * 100) : 100;
 
     const optionRow = (label, control) =>
       h(
@@ -726,6 +814,93 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
           }),
         ),
       ),
+      // Background transparency - available for image/video AND solid color.
+      h(
+        "div",
+        {
+          style: {
+            marginTop: 8,
+            opacity: noBg ? 0.45 : 1,
+            pointerEvents: noBg ? "none" : "auto",
+          },
+        },
+        optionRow(
+          t("opacity"),
+          h(Slider, {
+            min: 0,
+            max: 100,
+            step: 5,
+            value: opacityPct,
+            disabled: noBg,
+            tooltip: { formatter: (v) => `${v}%` },
+            onChange: (v) => onOption(slot, "opacity", v / 100),
+          }),
+        ),
+      ),
+      // Solid color section (chat slot only): 5 suggested colors + custom RGB.
+      slot === "chat"
+        ? h(
+            "div",
+            {
+              style: {
+                marginTop: 12,
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid rgba(128,128,128,0.2)",
+                background: "rgba(128,128,128,0.05)",
+              },
+            },
+            h(
+              "div",
+              { style: { fontWeight: 500, marginBottom: 4, fontSize: 13 } },
+              t("colorSection"),
+            ),
+            h(
+              "div",
+              { style: { color: "rgba(128,128,128,0.85)", fontSize: 12, marginBottom: 8 } },
+              t("colorHint"),
+            ),
+            h(
+              "div",
+              { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+              PRESET_COLORS.map((c) =>
+                h(
+                  "button",
+                  {
+                    key: c,
+                    title: c,
+                    onClick: () => onColor(slot, c),
+                    style: {
+                      width: 26,
+                      height: 26,
+                      borderRadius: "50%",
+                      background: c,
+                      border: isSolid && spec.color === c
+                        ? "2px solid #1677ff"
+                        : "1px solid rgba(128,128,128,0.3)",
+                      boxShadow: isSolid && spec.color === c
+                        ? "0 0 0 2px rgba(22,119,255,0.2)"
+                        : "none",
+                      cursor: "pointer",
+                      padding: 0,
+                    },
+                  },
+                ),
+              ),
+              h(
+                "span",
+                { style: { fontSize: 12, color: "rgba(128,128,128,0.85)", margin: "0 4px" } },
+                t("colorCustom"),
+              ),
+              h(ColorPicker, {
+                size: "small",
+                value: isSolid ? spec.color : "#E4E9EC",
+                showText: true,
+                onChangeComplete: (c) => onColor(slot, c.toHexString()),
+              }),
+            ),
+          )
+        : null,
       h(
         "div",
         { style: { display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" } },
@@ -802,6 +977,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
 
     const handleApply = React.useCallback((slot, item) => {
       const cur = configRef.current && configRef.current.slots[slot];
+      const curOpacity = cur ? (cur.opacity == null ? 1 : cur.opacity) : 1;
       const body = item
         ? {
             type: item.kind,
@@ -809,6 +985,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
             fit: (cur && cur.fit) || "cover",
             dim: cur ? (cur.dim == null ? 0.35 : cur.dim) : 0.35,
             blur: (cur && cur.blur) || 0,
+            opacity: curOpacity,
           }
         : null;
       putConfig(slot, body)
@@ -830,6 +1007,8 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
         fit: key === "fit" ? value : cur.fit || "cover",
         dim: key === "dim" ? value : cur.dim == null ? 0.35 : cur.dim,
         blur: key === "blur" ? value : cur.blur || 0,
+        opacity:
+          key === "opacity" ? value : cur.opacity == null ? 1 : cur.opacity,
       };
       putConfig(slot, body)
         .then((cfg) => {
@@ -843,6 +1022,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
     const handleUpload = React.useCallback(
       (slot, file) => {
         setUploading(true);
+        const cur = configRef.current && configRef.current.slots[slot];
         uploadLibrary(file)
           .then((item) =>
             putConfig(slot, {
@@ -851,6 +1031,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
               fit: "cover",
               dim: 0.35,
               blur: 0,
+              opacity: cur ? (cur.opacity == null ? 1 : cur.opacity) : 1,
             }),
           )
           .then(() => {
@@ -882,6 +1063,27 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
         .then((cfg) => {
           configRef.current = cfg;
           setConfigState(cfg);
+          notifyChanged();
+        })
+        .catch((err) => message.error((err && err.message) || "Error"));
+    }, []);
+
+    // Apply a solid color to a slot (keeps fit/dim/blur, dim is inert for
+    // solid colors since we render them verbatim).
+    const handleColor = React.useCallback((slot, color) => {
+      const cur = configRef.current && configRef.current.slots[slot];
+      putConfig(slot, {
+        type: "color",
+        color: String(color || "").trim().toUpperCase(),
+        fit: (cur && cur.fit) || "cover",
+        dim: cur ? (cur.dim == null ? 0.35 : cur.dim) : 0.35,
+        blur: (cur && cur.blur) || 0,
+        opacity: cur ? (cur.opacity == null ? 1 : cur.opacity) : 1,
+      })
+        .then((cfg) => {
+          configRef.current = cfg;
+          setConfigState(cfg);
+          message.success(t("applied"));
           notifyChanged();
         })
         .catch((err) => message.error((err && err.message) || "Error"));
@@ -976,6 +1178,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
           onOption: handleOption,
           onUpload: handleUpload,
           onDelete: handleDelete,
+          onColor: handleColor,
         }),
         h(SlotCard, {
           slot: "chat",
@@ -986,6 +1189,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
           onOption: handleOption,
           onUpload: handleUpload,
           onDelete: handleDelete,
+          onColor: handleColor,
         }),
       ),
     );

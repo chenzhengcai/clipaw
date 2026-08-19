@@ -32,20 +32,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from qwenpaw.constant import WORKING_DIR
 from qwenpaw.plugins.api import PluginApi
 
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "background-theme"
 
-# Where this file lives = plugin root (works both for source checkout and
-# the installed copy under ~/.qwenpaw/plugins/background-theme/).
-_PLUGIN_DIR = Path(__file__).resolve().parent
-_DATA_DIR = _PLUGIN_DIR / "data"
+# Data lives OUTSIDE the plugin directory (under the QwenPaw working dir,
+# e.g. ~/.qwenpaw/background-theme/), so reinstalling / updating the plugin
+# (which rmtree's the plugin dir) never wipes the user's backgrounds.
+_DATA_DIR = WORKING_DIR / PLUGIN_ID
 _LIBRARY_DIR = _DATA_DIR / "library"
 _CONFIG_FILE = _DATA_DIR / "config.json"
+
+# Legacy location (plugin dir) - migrated to _DATA_DIR once at startup.
+_LEGACY_DATA_DIR = Path(__file__).resolve().parent / "data"
 
 # Upload guards.
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB - background videos can be big.
@@ -57,7 +62,15 @@ _FITS = ("cover", "contain", "fill")
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 # Defaults applied when the config file has never been written.
-_EMPTY_SLOT: Dict[str, Any] = {"type": None, "file": None, "fit": "cover", "dim": 0.35, "blur": 0}
+_EMPTY_SLOT: Dict[str, Any] = {
+    "type": None,
+    "file": None,
+    "color": None,
+    "fit": "cover",
+    "dim": 0.35,
+    "blur": 0,
+    "opacity": 1.0,
+}
 # Master switch defaults to OFF: backgrounds only render after the user
 # explicitly enables the feature (mirrors the theme-plugin toggle UX).
 _DEFAULT_ENABLED = False
@@ -81,8 +94,12 @@ def _safe_filename(raw: str) -> str:
 
 
 def _media_url(file_name: str) -> str:
-    """Public static URL for a library file (plugin static-file route)."""
-    return f"/api/frontend_plugin/{PLUGIN_ID}/files/data/library/{file_name}"
+    """Auth-protected media URL served by this plugin's own router.
+
+    The frontend appends ``?token=`` (the Console auth supports token
+    query params for <img>/<video> which cannot send headers).
+    """
+    return f"/api/background-theme/files/{file_name}"
 
 
 def _read_config() -> Dict[str, Any]:
@@ -163,11 +180,17 @@ router = APIRouter()
 class BackgroundSpec(BaseModel):
     """One slot's background settings (as sent by the settings page)."""
 
-    type: Optional[str] = Field(None, description='"image" | "video" | null')
-    file: Optional[str] = Field(None, description="library file name")
+    type: Optional[str] = Field(None, description='"image" | "video" | "color" | null')
+    file: Optional[str] = Field(None, description="library file name (image/video)")
+    color: Optional[str] = Field(
+        None, description='hex color "#RGB" / "#RRGGBB" (type="color")'
+    )
     fit: str = Field("cover", description='"cover" | "contain" | "fill"')
     dim: float = Field(0.35, ge=0.0, le=1.0, description="dim overlay opacity")
     blur: float = Field(0.0, ge=0.0, le=40.0, description="blur px")
+    opacity: float = Field(
+        1.0, ge=0.0, le=1.0, description="background layer transparency (1 = opaque)"
+    )
 
 
 class ConfigUpdate(BaseModel):
@@ -179,16 +202,35 @@ class ConfigUpdate(BaseModel):
     )
 
 
+_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def _normalize_hex(value: str) -> str:
+    """Validate and normalize a hex color to #RRGGBB (uppercase digits)."""
+    value = (value or "").strip()
+    if not _HEX_COLOR_RE.match(value):
+        raise HTTPException(400, "color must be a hex value like #RGB or #RRGGBB")
+    if len(value) == 4:  # #RGB -> #RRGGBB
+        value = "#" + "".join(ch * 2 for ch in value[1:])
+    return value.upper()
+
+
 def _decorate(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Attach serving URLs to the config payload for the frontend."""
     out: Dict[str, Any] = {"enabled": cfg.get("enabled") is True, "slots": {}}
     for slot, spec in cfg["slots"].items():
         enriched = dict(spec)
-        if spec.get("file"):
+        enriched.pop("url", None)
+        if spec.get("type") == "color":
+            enriched["url"] = None
+            enriched["file"] = None
+        elif spec.get("file"):
             enriched["url"] = _media_url(spec["file"])
+            enriched["color"] = None
         else:
             enriched["type"] = None
             enriched["url"] = None
+            enriched["color"] = None
         out["slots"][slot] = enriched
     return out
 
@@ -219,29 +261,44 @@ async def put_config(update: ConfigUpdate) -> Dict[str, Any]:
         raise HTTPException(400, f"slot must be one of {SLOTS}")
 
     cfg = _read_config()
-    if update.background is None or not update.background.file:
+    if update.background is None or (
+        not update.background.file and not update.background.color
+    ):
         cfg["slots"][slot] = dict(_EMPTY_SLOT)
     else:
         spec = update.background
-        if spec.type not in ("image", "video"):
-            raise HTTPException(400, "type must be image or video")
+        if spec.type not in ("image", "video", "color"):
+            raise HTTPException(400, "type must be image, video or color")
         if spec.fit not in _FITS:
             raise HTTPException(400, f"fit must be one of {_FITS}")
-        target = _LIBRARY_DIR / spec.file
-        resolved = target.resolve()
-        if not resolved.is_relative_to(_LIBRARY_DIR.resolve()):
-            raise HTTPException(403, "Access denied")
-        if not resolved.exists():
-            raise HTTPException(404, f"file not in library: {spec.file}")
-        if _kind_for_suffix(resolved.suffix) != spec.type:
-            raise HTTPException(400, "file kind does not match type")
-        cfg["slots"][slot] = {
-            "type": spec.type,
-            "file": spec.file,
-            "fit": spec.fit,
-            "dim": spec.dim,
-            "blur": spec.blur,
-        }
+        if spec.type == "color":
+            cfg["slots"][slot] = {
+                "type": "color",
+                "file": None,
+                "color": _normalize_hex(spec.color or ""),
+                "fit": spec.fit,
+                "dim": spec.dim,
+                "blur": spec.blur,
+                "opacity": spec.opacity,
+            }
+        else:
+            target = _LIBRARY_DIR / (spec.file or "")
+            resolved = target.resolve()
+            if not resolved.is_relative_to(_LIBRARY_DIR.resolve()):
+                raise HTTPException(403, "Access denied")
+            if not resolved.exists():
+                raise HTTPException(404, f"file not in library: {spec.file}")
+            if _kind_for_suffix(resolved.suffix) != spec.type:
+                raise HTTPException(400, "file kind does not match type")
+            cfg["slots"][slot] = {
+                "type": spec.type,
+                "file": spec.file,
+                "color": None,
+                "fit": spec.fit,
+                "dim": spec.dim,
+                "blur": spec.blur,
+                "opacity": spec.opacity,
+            }
     _write_config(cfg)
     return _decorate(cfg)
 
@@ -324,6 +381,56 @@ async def delete_library_file(name: str) -> Dict[str, Any]:
     return {"deleted": name, "config": _decorate(cfg) if changed else None}
 
 
+@router.get("/files/{name}", summary="Serve a background media file")
+async def serve_media_file(name: str) -> FileResponse:
+    """Stream an uploaded image/video (FileResponse supports HTTP Range,
+    so videos play/seek properly). Requires auth like every /api route -
+    the frontend passes the token via ``?token=`` query param."""
+    target = (_LIBRARY_DIR / name).resolve()
+    if not target.is_relative_to(_LIBRARY_DIR.resolve()):
+        raise HTTPException(403, "Access denied")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, f"File not found: {name}")
+    return FileResponse(target)
+
+
+def _migrate_legacy_data() -> None:
+    """One-time migration from the old in-plugin data dir (~/plugins/
+    <id>/data) to the persistent working-dir location. Never overwrites
+    existing files in the new location."""
+    if not _LEGACY_DATA_DIR.exists():
+        return
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    legacy_lib = _LEGACY_DATA_DIR / "library"
+    if legacy_lib.exists():
+        for path in legacy_lib.iterdir():
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            dest = _LIBRARY_DIR / path.name
+            if not dest.exists():
+                try:
+                    path.replace(dest)
+                    logger.info("[background-theme] migrated %s", path.name)
+                except OSError as exc:
+                    logger.warning("[background-theme] migrate %s failed: %s", path.name, exc)
+
+    legacy_cfg = _LEGACY_DATA_DIR / "config.json"
+    if legacy_cfg.exists() and not _CONFIG_FILE.exists():
+        try:
+            legacy_cfg.replace(_CONFIG_FILE)
+            logger.info("[background-theme] migrated config.json")
+        except OSError as exc:
+            logger.warning("[background-theme] migrate config failed: %s", exc)
+
+    # Remove the legacy library dir once empty (config may still live there).
+    try:
+        if legacy_lib.exists() and not any(legacy_lib.iterdir()):
+            legacy_lib.rmdir()
+    except OSError:
+        pass
+
+
 # ── Plugin entry point ───────────────────────────────────────────────
 
 
@@ -331,9 +438,14 @@ class BackgroundThemePlugin:
     """Register the REST router when the plugin loads."""
 
     def register(self, api: PluginApi) -> None:
+        _migrate_legacy_data()
         _LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
         api.register_http_router(router, prefix=f"/{PLUGIN_ID}", tags=["background-theme"])
-        logger.info("[background-theme] router mounted at /api/%s", PLUGIN_ID)
+        logger.info(
+            "[background-theme] router mounted at /api/%s (data: %s)",
+            PLUGIN_ID,
+            _DATA_DIR,
+        )
 
 
 plugin = BackgroundThemePlugin()

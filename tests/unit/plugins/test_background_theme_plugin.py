@@ -73,9 +73,7 @@ async def test_upload_image_and_list(api_client, _use_tmp_storage):
     async with api_client:
         item = await _upload(api_client, "wallpaper.png")
         assert item["kind"] == "image"
-        assert item["url"].startswith(
-            "/api/frontend_plugin/background-theme/files/data/library/"
-        )
+        assert item["url"].startswith("/api/background-theme/files/")
         assert item["name"].endswith("_wallpaper.png")
 
         listed = await api_client.get("/api/background-theme/library")
@@ -83,6 +81,32 @@ async def test_upload_image_and_list(api_client, _use_tmp_storage):
         items = listed.json()["items"]
         assert len(items) == 1
         assert items[0]["name"] == item["name"]
+
+
+async def test_serve_media_file(api_client, _use_tmp_storage):
+    """Uploaded files are streamed by the plugin router (Range-capable)."""
+    async with api_client:
+        item = await _upload(api_client, "pic.png", content=b"\x89PNG-fake")
+
+        resp = await api_client.get(f"/api/background-theme/files/{item['name']}")
+        assert resp.status_code == 200
+        assert resp.content == b"\x89PNG-fake"
+
+        # Range request (video seeking)
+        ranged = await api_client.get(
+            f"/api/background-theme/files/{item['name']}",
+            headers={"Range": "bytes=0-3"},
+        )
+        assert ranged.status_code == 206
+        assert ranged.content == b"\x89PNG"
+
+        # traversal / missing
+        assert (
+            await api_client.get("/api/background-theme/files/../config.json")
+        ).status_code in (403, 404)
+        assert (
+            await api_client.get("/api/background-theme/files/nope.png")
+        ).status_code == 404
 
 
 async def test_upload_video_kind(api_client):
@@ -231,6 +255,97 @@ async def test_put_config_validates(api_client, _use_tmp_storage):
             },
         )
         assert resp.status_code in (403, 404)
+
+        # color without a valid hex
+        resp = await api_client.put(
+            "/api/background-theme/config",
+            json={
+                "slot": "chat",
+                "background": {"type": "color", "color": "blue"},
+            },
+        )
+        assert resp.status_code == 400
+
+
+async def test_put_config_solid_color(api_client, _use_tmp_storage):
+    async with api_client:
+        # shorthand #RGB normalized to #RRGGBB
+        resp = await api_client.put(
+            "/api/background-theme/config",
+            json={
+                "slot": "chat",
+                "background": {"type": "color", "color": "#abc"},
+            },
+        )
+        assert resp.status_code == 200
+        slot = resp.json()["slots"]["chat"]
+        assert slot["type"] == "color"
+        assert slot["color"] == "#AABBCC"
+        assert slot["url"] is None
+        assert slot["file"] is None
+
+        # persisted
+        again = await api_client.get("/api/background-theme/config")
+        assert again.json()["slots"]["chat"]["color"] == "#AABBCC"
+
+        # full hex roundtrip
+        full = await api_client.put(
+            "/api/background-theme/config",
+            json={
+                "slot": "global",
+                "background": {
+                    "type": "color",
+                    "color": "#F7F3EE",
+                    "fit": "cover",
+                    "dim": 0.1,
+                    "blur": 0,
+                    "opacity": 0.6,
+                },
+            },
+        )
+        assert full.json()["slots"]["global"]["color"] == "#F7F3EE"
+        assert full.json()["slots"]["global"]["opacity"] == 0.6
+
+
+async def test_put_config_opacity_roundtrip(api_client, _use_tmp_storage):
+    """Opacity persists for image/video slots and is range-validated."""
+    async with api_client:
+        item = await _upload(api_client, "a.png")
+
+        resp = await api_client.put(
+            "/api/background-theme/config",
+            json={
+                "slot": "chat",
+                "background": {
+                    "type": "image",
+                    "file": item["name"],
+                    "fit": "cover",
+                    "dim": 0.3,
+                    "blur": 2,
+                    "opacity": 0.55,
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["slots"]["chat"]["opacity"] == 0.55
+
+        # persisted
+        again = await api_client.get("/api/background-theme/config")
+        assert again.json()["slots"]["chat"]["opacity"] == 0.55
+
+        # out of range -> 422 (pydantic bounds)
+        bad = await api_client.put(
+            "/api/background-theme/config",
+            json={
+                "slot": "chat",
+                "background": {
+                    "type": "image",
+                    "file": item["name"],
+                    "opacity": 1.5,
+                },
+            },
+        )
+        assert bad.status_code == 422
 
 
 async def test_clear_config(api_client, _use_tmp_storage):
