@@ -12,7 +12,13 @@ interface UsePluginColumnsOptions {
   builtinThemeIds?: Set<string>;
   activeThemeId?: string | null;
   onToggleTheme?: (themeId: string) => void;
+  /** Background-theme plugin master switch (null = backend unavailable). */
+  backgroundThemeEnabled?: boolean | null;
+  onToggleBackgroundTheme?: (enabled: boolean) => void;
 }
+
+/** Plugin id of the built-in background personalization plugin. */
+export const BACKGROUND_THEME_PLUGIN_ID = "background-theme";
 
 export function usePluginColumns({
   uninstallingId,
@@ -20,6 +26,8 @@ export function usePluginColumns({
   builtinThemeIds,
   activeThemeId,
   onToggleTheme,
+  backgroundThemeEnabled,
+  onToggleBackgroundTheme,
 }: UsePluginColumnsOptions) {
   const { t } = useTranslation();
 
@@ -124,6 +132,17 @@ export function usePluginColumns({
             <Switch
               checked={activeThemeId === themeId}
               onChange={() => onToggleTheme?.(themeId)}
+              size="small"
+            />
+          );
+        }
+        // Background-theme is a protected personalization feature: toggled
+        // via switch like the built-in themes, never uninstalled from here.
+        if (record.id === BACKGROUND_THEME_PLUGIN_ID) {
+          return (
+            <Switch
+              checked={backgroundThemeEnabled === true}
+              onChange={(checked) => onToggleBackgroundTheme?.(checked)}
               size="small"
             />
           );

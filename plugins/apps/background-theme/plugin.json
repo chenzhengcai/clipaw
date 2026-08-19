@@ -1,0 +1,26 @@
+{
+  "id": "background-theme",
+  "name": "背景设置",
+  "version": "0.1.0",
+  "description": "上传图片或视频作为软件全局背景与聊天对话背景,支持历史背景管理、遮罩/模糊等效果调节。",
+  "description_i18n": {
+    "zh-CN": "上传图片或视频作为软件全局背景与聊天对话背景,支持历史背景管理、遮罩/模糊等效果调节。",
+    "en-US": "Use images or videos as the app-wide background and the chat dialog background. Includes a background library with history management, dim/blur effects."
+  },
+  "author": "QwenPaw Team",
+  "type": "general",
+  "entry": {
+    "backend": "plugin.py",
+    "frontend": "ui/index.js"
+  },
+  "qwenpaw_version": {
+    "min": "2.0.1"
+  },
+  "meta": {
+    "category": "personalization",
+    "permissions": {
+      "chat": false,
+      "storage": true
+    }
+  }
+}

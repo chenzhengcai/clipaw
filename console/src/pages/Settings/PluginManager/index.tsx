@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { useEffect, useState } from "react";
 import { Button, Empty, Spin, Table, Tabs } from "antd";
 import { ExternalLink, Package, Plus } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
@@ -8,6 +9,10 @@ import { useInstallModal } from "./hooks/useInstallModal";
 import { InstallPluginModal } from "./components/InstallPluginModal";
 import { OfficialPluginList } from "./components/OfficialPluginList";
 import { MarketPluginList } from "./components/MarketPluginList";
+import {
+  fetchBackgroundThemeEnabled,
+  toggleBackgroundThemeEnabled,
+} from "@/api/modules/plugin";
 import { availableThemes } from "@/themes";
 import { useThemeStore } from "@/stores/themeStore";
 import type { PluginInfo } from "@/api/modules/plugin";
@@ -40,12 +45,36 @@ export default function PluginManagerPage() {
     setActiveThemeId(activeThemeId === themeId ? null : themeId);
   };
 
+  // Background-theme master switch (plugin-backed, switch-only row).
+  const [backgroundThemeEnabled, setBackgroundThemeEnabled] =
+    useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchBackgroundThemeEnabled().then((enabled) => {
+      if (!cancelled) setBackgroundThemeEnabled(enabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onToggleBackgroundTheme = (enabled: boolean) => {
+    // Optimistic flip; revert when the plugin backend is unreachable.
+    const prev = backgroundThemeEnabled;
+    setBackgroundThemeEnabled(enabled);
+    toggleBackgroundThemeEnabled(enabled).then((next) => {
+      if (next === null) setBackgroundThemeEnabled(prev);
+    });
+  };
+
   const columns = usePluginColumns({
     uninstallingId,
     onUninstall: handleUninstall,
     builtinThemeIds,
     activeThemeId,
     onToggleTheme,
+    backgroundThemeEnabled,
+    onToggleBackgroundTheme,
   });
 
   const dataSource = [...themePlugins, ...(plugins || [])];
