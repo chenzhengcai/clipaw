@@ -34,6 +34,8 @@ from fastapi import (
     Query,
     Request,
     UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
 )
 from fastapi.responses import ORJSONResponse, Response, StreamingResponse
 from watchfiles import awatch, Change
@@ -1341,7 +1343,7 @@ async def put_transcription_provider_type(
     """Set the transcription provider type."""
     raw = body.get("transcription_provider_type")
     provider_type = (str(raw) if raw is not None else "").strip().lower()
-    valid = {"disabled", "whisper_api", "local_whisper"}
+    valid = {"disabled", "whisper_api", "local_whisper", "volcengine_bigmodel"}
     if provider_type not in valid:
         raise HTTPException(
             status_code=400,
@@ -1499,6 +1501,118 @@ async def post_transcribe_audio(
         try:
             os.unlink(tmp_path)
         except OSError:
+            pass
+
+
+@router.post(
+    "/voice-test-connection",
+    summary="Test Volcengine ASR connectivity",
+    description="Test connection to Volcengine BigModel streaming ASR service",
+)
+async def voice_test_connection(body: dict = Body(default={})):
+    """Test Volcengine ASR connectivity."""
+    from ...agents.utils.audio_transcription import test_volcengine_connection
+
+    api_key = body.get("api_key", "")
+    resource_id = body.get("resource_id", "")
+    result = await test_volcengine_connection(api_key, resource_id)
+    return result
+
+
+# ── WebSocket: streaming voice transcription ───────────────────────────────
+# Protocol (browser → server):
+#   Binary Frame: raw PCM Int16 16kHz mono audio chunk
+#   Text Frame "DONE": recording finished
+#   Text Frame "RESET": discard current ASR session and start fresh
+# Protocol (server → browser):
+#   {"type": "partial", "text": "..."} — intermediate result
+#   {"type": "final", "text": "..."} — final result
+#   {"type": "error", "message": "..."} — fatal error
+
+
+@router.websocket("/transcribe/ws")
+async def transcribe_ws(websocket: WebSocket):
+    """WebSocket endpoint for streaming voice transcription via Volcengine ASR."""
+    from ...agents.utils.audio_transcription import (
+        stream_transcribe_volcengine,
+    )
+    from ...config import load_config
+
+    config = load_config()
+    if config.agents.transcription_provider_type != "volcengine_bigmodel":
+        await websocket.accept()
+        await websocket.send_text(
+            json.dumps(
+                {"type": "error", "message": "Volcengine ASR not configured"},
+                ensure_ascii=False,
+            ),
+        )
+        await websocket.close()
+        return
+
+    await websocket.accept()
+
+    async def _send_json(payload: dict) -> None:
+        try:
+            await websocket.send_text(
+                json.dumps(payload, ensure_ascii=False),
+            )
+        except Exception:
+            pass
+
+    async def _on_text(text: str) -> None:
+        await _send_json({"type": "partial", "text": text})
+
+    async def _on_done(text: str) -> None:
+        await _send_json({"type": "final", "text": text})
+
+    async def _on_error(msg: str) -> None:
+        await _send_json({"type": "error", "message": msg})
+
+    try:
+        audio_queue, finish = await stream_transcribe_volcengine(
+            on_text=_on_text,
+            on_done=_on_done,
+            on_error=_on_error,
+        )
+    except Exception as start_exc:
+        await _send_json(
+            {"type": "error", "message": f"Failed to start: {start_exc}"},
+        )
+        return
+
+    try:
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if "text" in msg:
+                if msg["text"] == "DONE":
+                    audio_queue.put_nowait(None)
+                    break
+                if msg["text"] == "RESET":
+                    audio_queue.put_nowait(None)
+                    await finish()
+                    audio_queue, finish = await stream_transcribe_volcengine(
+                        on_text=_on_text,
+                        on_done=_on_done,
+                        on_error=_on_error,
+                    )
+                    continue
+                continue
+            if "bytes" in msg and msg["bytes"]:
+                audio_queue.put_nowait(msg["bytes"])
+
+        await finish()
+    except WebSocketDisconnect:
+        logger.debug("WS transcribe: client disconnected")
+    except Exception:
+        logger.warning("WS transcribe: unexpected error", exc_info=True)
+        await _send_json({"type": "error", "message": "Internal server error"})
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
             pass
 
 
@@ -2007,3 +2121,51 @@ async def get_available_commands(request: Request):
                 },
             )
     return ORJSONResponse({"commands": commands})
+
+
+# ── Client configuration persistence ──────────────────────────────────────
+# Stores UI preferences in a JSON file so they survive Tauri port changes.
+
+_CLIENT_CONFIG_FILE = Path(os.environ.get(
+    "QWENPAW_WORKING_DIR", os.path.expanduser("~/.clipaw")
+)) / "client-config.json"
+
+
+def _read_client_config() -> dict:
+    try:
+        if _CLIENT_CONFIG_FILE.exists():
+            return json.loads(_CLIENT_CONFIG_FILE.read_text("utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _write_client_config(data: dict) -> None:
+    try:
+        _CLIENT_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CLIENT_CONFIG_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), "utf-8"
+        )
+    except Exception:
+        pass
+
+
+@router.get("/client-config", summary="Get client configuration")
+async def get_client_config() -> dict:
+    """Return persisted client configuration (UI preferences, shortcuts, etc.)."""
+    return _read_client_config()
+
+
+@router.put("/client-config", summary="Update client configuration")
+async def put_client_config(body: dict = Body(...)) -> dict:
+    """Persist a client configuration key-value pair.
+
+    The body is merged into the existing config file. Example::
+
+        PUT /workspace/client-config
+        {"qwenpaw-last-used-agent": "xiaomi"}
+    """
+    current = _read_client_config()
+    current.update(body)
+    _write_client_config(current)
+    return current

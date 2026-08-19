@@ -356,7 +356,7 @@ export default function Header() {
               className={styles.logoImg}
             />
           </Slot>
-          <div className={styles.logoDivider} />
+          <div style={{ display: "none" }} className={styles.logoDivider} />
           {version && (
             <Badge
               dot={!!hasUpdate && !isReady && !isBackgroundActive}
@@ -436,6 +436,7 @@ export default function Header() {
         <Slot name="header.left" kind="fill" />
         <Space size="middle">
           <Slot name="header.right" kind="fill" />
+          <div style={{ display: "none" }}>
           {resourcesMenuItems.length > 0 && (
             <Dropdown menu={{ items: resourcesMenuItems }}>
               <Button type="text" className={styles.hideOnMobile}>
@@ -443,6 +444,8 @@ export default function Header() {
               </Button>
             </Dropdown>
           )}
+          </div>
+          <div style={{ display: "none" }}>
           <Tooltip title={t("header.github")}>
             <Button
               type="text"
@@ -453,7 +456,8 @@ export default function Header() {
               {t("header.github")}
             </Button>
           </Tooltip>
-          <div className={styles.headerDivider} />
+          </div>
+          <div className={styles.headerDivider} style={{ display: "none" }} />
           <span className={styles.hideOnMobile}>
             <LanguageSwitcher />
           </span>

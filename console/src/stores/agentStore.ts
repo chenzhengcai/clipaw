@@ -94,6 +94,13 @@ export const useAgentStore = create<AgentStore>()(
         } catch {
           /* ignore */
         }
+        // Persist to backend (survives Tauri port changes and restarts)
+        import("../api/clientConfig")
+          .then((m) => m.saveClientConfig(LAST_USED_AGENT_KEY, agentId))
+          .catch(() => {});
+        import("../api/modules/agent")
+          .then(({ agentApi }) => agentApi.setActiveAgent(agentId))
+          .catch(() => {});
       },
 
       setAgents: (agents) => set({ agents }),

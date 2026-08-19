@@ -5,6 +5,7 @@ import hmac
 import inspect
 import mimetypes
 import os
+import shutil
 import sys
 import time
 from contextlib import asynccontextmanager, suppress
@@ -85,6 +86,55 @@ async def _sync_scroll_history_on_startup() -> None:
         await run_sync_io(sync_all_scroll_agents)
     except Exception:  # noqa: BLE001 - session sync must never block startup
         logger.warning("session-sync: import/launch failed", exc_info=True)
+
+
+# Bundled plugins shipped in the source tree under plugins/apps/.
+# Copied into the runtime plugins dir on startup so they are available
+# without a manual `qwenpaw plugin install` step.
+_BUNDLED_PLUGIN_IDS = ["background-theme"]
+
+
+def _bundled_plugins_root() -> Path | None:
+    """Return the ``plugins/apps`` directory shipped alongside the package.
+
+    In a source checkout (editable install) the directory lives at
+    ``<repo>/plugins/apps``.  In a wheel/sdist it may be inside the
+    package tree.  Returns ``None`` when not found (e.g. pip-installed
+    without bundled plugins).
+    """
+    here = Path(__file__).resolve()
+    for ancestor in here.parents:
+        candidate = ancestor / "plugins" / "apps"
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _sync_bundled_plugins(plugins_dir: Path) -> None:
+    """Copy bundled plugins into the runtime plugins directory.
+
+    Existing copies are left untouched so user modifications are preserved.
+    """
+    root = _bundled_plugins_root()
+    if root is None:
+        return
+    for plugin_id in _BUNDLED_PLUGIN_IDS:
+        source = root / plugin_id
+        if not source.is_dir():
+            continue
+        target = plugins_dir / plugin_id
+        if target.exists():
+            continue
+        try:
+            plugins_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, target)
+            logger.info("Installed bundled plugin '%s' to %s", plugin_id, target)
+        except Exception:  # noqa: BLE001 - must not block startup
+            logger.warning(
+                "Failed to sync bundled plugin '%s': %s",
+                plugin_id,
+                exc_info=True,
+            )
 
 
 async def _browser_idle_watchdog(kernel: Any, interval: float) -> None:
@@ -380,6 +430,12 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             from ..config.utils import get_plugins_dir
             from ..plugins.loader import PluginLoader
             from ..plugins.runtime import RuntimeHelpers
+
+            # Sync bundled plugins shipped under <repo>/plugins/apps/ into
+            # the runtime plugins dir so they are auto-loaded on startup.
+            # This makes background-theme and other built-in personalization
+            # plugins available without a manual `qwenpaw plugin install`.
+            _sync_bundled_plugins(get_plugins_dir())
 
             # PawApps install into the plugins dir alongside other plugins
             # and load through the same pipeline as 'app'-type plugins

@@ -89,6 +89,35 @@ export async function fetchPlugins(): Promise<PluginInfo[]> {
 }
 
 /**
+ * Background-theme plugin: read the master-switch state.
+ * Returns null when the plugin backend is unavailable (not installed).
+ */
+export async function fetchBackgroundThemeEnabled(): Promise<boolean | null> {
+  const response = await fetch(getApiUrl("/background-theme/config"), {
+    headers: buildAuthHeaders(),
+  });
+  if (!response.ok) return null;
+  const cfg = await response.json().catch(() => null);
+  return cfg && typeof cfg.enabled === "boolean" ? cfg.enabled : null;
+}
+
+/**
+ * Background-theme plugin: toggle the master switch.
+ */
+export async function toggleBackgroundThemeEnabled(
+  enabled: boolean,
+): Promise<boolean | null> {
+  const response = await fetch(getApiUrl("/background-theme/enabled"), {
+    method: "PUT",
+    headers: { ...buildAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) return null;
+  const cfg = await response.json().catch(() => null);
+  return cfg && typeof cfg.enabled === "boolean" ? cfg.enabled : null;
+}
+
+/**
  * Install a plugin from a local path or HTTP(S) URL via hot-reload.
  */
 export async function fetchPluginCatalog(): Promise<OfficialPluginCatalog> {

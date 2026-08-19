@@ -1,12 +1,10 @@
 import {
   Layout,
-  Menu,
   Button,
   Modal,
   Input,
   Form,
   Tooltip,
-  Badge,
   Popover,
   Tour,
 } from "antd";
@@ -46,12 +44,10 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useMenuItems, useRoutes } from "../plugins/registry/hooks";
 import { Slot } from "../plugins/registry/Slot";
 import {
-  deriveOpenKeys,
   findMenuItem,
   flattenMenu,
   renderIcon,
   routeIdToPath,
-  toAntdItems,
 } from "./registry/adapter";
 import type { FlatMenuEntry } from "./registry/adapter";
 import { filterMenuForAgentCapabilities } from "./registry/capabilities";
@@ -108,6 +104,50 @@ function flattenMenuForSimpleMode(items: MenuItem[]): MenuItem[] {
     }
   }
   return result;
+}
+
+// ── Section Header (collapsible group toggle) ──────────────────────────────
+
+function SectionHeader({
+  label,
+  collapsed: isCollapsed,
+  onClick,
+}: {
+  label: string;
+  collapsed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={styles.sectionHeader}
+      onClick={onClick}
+      type="button"
+      aria-expanded={!isCollapsed}
+    >
+      <span className={styles.sectionHeaderLabel}>{label}</span>
+      <span
+        className={`${styles.sectionHeaderArrow} ${
+          isCollapsed ? styles.sectionHeaderArrowCollapsed : ""
+        }`}
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M4.5 2.5L8 6L4.5 9.5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+    </button>
+  );
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -203,6 +243,40 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   const simpleFoldedNav = simpleFlatNav.filter(
     (entry) => entry.key !== "core.inbox",
   );
+
+  // ── Collapsible section state ──────────────────────────────────────────
+  // Default: all sections collapsed; persisted to localStorage so the user's
+  // fold state survives page refreshes.
+  const COLLAPSED_SECTIONS_KEY = "qwenpaw.sidebar.collapsedSections";
+  const DEFAULT_COLLAPSED_SECTIONS: Record<string, boolean> = {
+    "core.control-group": true,
+    "core.workspace-group": true,
+    "core.settings-group": true,
+    "plugins-group": true,
+  };
+
+  const [collapsedSections, setCollapsedSections] = useState<
+    Record<string, boolean>
+  >(() => {
+    try {
+      const saved = window.localStorage.getItem(COLLAPSED_SECTIONS_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch { /* ignore */ }
+    return DEFAULT_COLLAPSED_SECTIONS;
+  });
+
+  const toggleSection = useCallback((sectionKey: string) => {
+    setCollapsedSections((prev) => {
+      const next = { ...prev, [sectionKey]: !prev[sectionKey] };
+      try {
+        window.localStorage.setItem(
+          COLLAPSED_SECTIONS_KEY,
+          JSON.stringify(next),
+        );
+      } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   // ── Effects ──────────────────────────────────────────────────────────────
 
@@ -332,68 +406,36 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
     : "rgba(255, 157, 77, 1)";
   const effectiveShake = shakeInbox && wobbleEnabled;
 
-  // ── Adapter: convert MenuItem trees to antd, with inbox badge decoration.
-
   /** Mark current approvals as "seen" so the wobble stops. */
   const handleInboxHover = useCallback(() => {
     seenApprovalIdsRef.current = new Set(currentApprovalIdsRef.current);
     setShakeInbox(false);
   }, []);
 
-  /**
-   * Bridge hover events from the antd Menu `<li>` to our handler.
-   * addEventListener de-duplicates the same function reference, so re-calling
-   * on the same element is harmless; old detached elements are GC'd naturally.
-   */
-  const inboxLiRefCallback = useCallback(
-    (node: HTMLSpanElement | null) => {
-      const li = node?.closest("li");
-      if (!li) return;
-      li.addEventListener("mouseenter", handleInboxHover);
+  /** Wrap the inbox label with the unread badge dot while keeping other labels intact. */
+  const decorateLabel = useCallback(
+    (item: MenuItem, label: ReactNode): ReactNode => {
+      if (item.id !== "core.inbox" || label == null) return label;
+      return (
+        <span style={{ position: "relative", display: "inline-flex" }}>
+          {label}
+          {hasInboxUnread && (
+            <span
+              style={{
+                position: "absolute",
+                top: -1,
+                right: -3,
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: inboxDotColor,
+              }}
+            />
+          )}
+        </span>
+      );
     },
-    [handleInboxHover],
-  );
-
-  /** Wrap the inbox label with the unread-Badge while keeping all other labels intact. */
-  const decorateLabel = (item: MenuItem, label: ReactNode): ReactNode => {
-    if (item.id !== "core.inbox" || label == null) return label;
-    return (
-      <span ref={inboxLiRefCallback}>
-        <Badge dot={hasInboxUnread} color={inboxDotColor} offset={[5, 7]}>
-          <span>{label}</span>
-        </Badge>
-      </span>
-    );
-  };
-
-  const getItemClassName = (item: MenuItem) => {
-    if (item.id === "core.inbox" && effectiveShake) {
-      return styles.inboxShake;
-    }
-    return undefined;
-  };
-
-  const agentMenuItems = useMemo(
-    () =>
-      toAntdItems(agentMenu, { collapsed, decorateLabel, getItemClassName }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      agentMenu,
-      collapsed,
-      hasUnreadMessages,
-      hasPendingApprovals,
-      effectiveShake,
-    ],
-  );
-
-  const settingsMenuItems = useMemo(
-    () => toAntdItems(settingsMenu, { collapsed }),
-    [settingsMenu, collapsed],
-  );
-
-  const openKeys = useMemo(
-    () => [...deriveOpenKeys(agentMenu), ...deriveOpenKeys(settingsMenu)],
-    [agentMenu, settingsMenu],
+    [hasInboxUnread, inboxDotColor],
   );
 
   const collapsedNavItems = useMemo(() => {
@@ -760,27 +802,179 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
               </button>
             </div>
             <Slot name="sider.top" kind="fill" />
-            <Menu
-              mode="inline"
-              selectedKeys={[selectedKey]}
-              openKeys={openKeys}
-              onClick={({ key }) => handleMenuClick(String(key), agentMenu)}
-              items={agentMenuItems}
-              theme={isDark ? "dark" : "light"}
-              className={styles.sideMenu}
-            />
+
+            {/* Agent-scoped menu items from menuRegistry */}
+            {agentMenu.map((item) => {
+              const itemWithChildren = item as MenuItem & { __children?: MenuItem[] };
+              if (itemWithChildren.__children) {
+                const groupId = item.id;
+                const isSectionCollapsed = !!collapsedSections[groupId];
+                const children = itemWithChildren.__children;
+                return (
+                  <div key={groupId} className={styles.navSection}>
+                    <SectionHeader
+                      label={
+                        typeof item.label === "function"
+                          ? String(item.label() ?? "")
+                          : String(item.label ?? "")
+                      }
+                      collapsed={isSectionCollapsed}
+                      onClick={() => toggleSection(groupId)}
+                    />
+                    {!isSectionCollapsed && (
+                      <div className={styles.navSectionItems}>
+                        {children
+                          .filter((c: MenuItem) => c.visible?.() !== false)
+                          .map((child: MenuItem) => (
+                            <button
+                              key={child.id}
+                              className={`${styles.navItem}${
+                                selectedKey === child.id
+                                  ? ` ${styles.navItemActive}`
+                                  : ""
+                              }${
+                                child.id === "core.inbox" && effectiveShake
+                                  ? ` ${styles.inboxShake}`
+                                  : ""
+                              }`}
+                              onMouseEnter={
+                                child.id === "core.inbox"
+                                  ? handleInboxHover
+                                  : undefined
+                              }
+                              onClick={() => handleMenuClick(child.id, agentMenu)}
+                            >
+                              <span className={styles.navItemIcon}>
+                                {renderIcon(child.icon, 16)}
+                                {child.id === "core.inbox" && hasInboxUnread && (
+                                  <span className={styles.navItemBadge} />
+                                )}
+                              </span>
+                              <span className={styles.navItemLabel}>
+                                {decorateLabel(
+                                  child,
+                                  typeof child.label === "function"
+                                    ? child.label()
+                                    : child.label,
+                                )}
+                              </span>
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              } else if (item.divider) {
+                return <hr key={item.id} className={styles.navDivider} />;
+              } else {
+                return (
+                  <button
+                    key={item.id}
+                    className={`${styles.navItem}${
+                      selectedKey === item.id ? ` ${styles.navItemActive}` : ""
+                    }${
+                      item.id === "core.inbox" && effectiveShake
+                        ? ` ${styles.inboxShake}`
+                        : ""
+                    }`}
+                    onMouseEnter={
+                      item.id === "core.inbox" ? handleInboxHover : undefined
+                    }
+                    onClick={() => handleMenuClick(item.id, agentMenu)}
+                  >
+                    <span className={styles.navItemIcon}>
+                      {renderIcon(item.icon, 16)}
+                      {item.id === "core.inbox" && hasInboxUnread && (
+                        <span className={styles.navItemBadge} />
+                      )}
+                    </span>
+                    <span className={styles.navItemLabel}>
+                      {decorateLabel(
+                        item,
+                        typeof item.label === "function"
+                          ? item.label()
+                          : item.label,
+                      )}
+                    </span>
+                  </button>
+                );
+              }
+            })}
           </div>
 
-          {/* Global settings section */}
-          <Menu
-            mode="inline"
-            selectedKeys={[selectedKey]}
-            openKeys={openKeys}
-            onClick={({ key }) => handleMenuClick(String(key), settingsMenu)}
-            items={settingsMenuItems}
-            theme={isDark ? "dark" : "light"}
-            className={styles.sideMenu}
-          />
+          {/* Global settings section — same visual style as agent section */}
+          <div className={styles.settingsSection}>
+            {settingsMenu.map((item) => {
+              const itemWithChildren = item as MenuItem & { __children?: MenuItem[] };
+              if (itemWithChildren.__children) {
+                const groupId = item.id;
+                const isSectionCollapsed = !!collapsedSections[groupId];
+                const children = itemWithChildren.__children;
+                return (
+                  <div key={groupId} className={styles.navSection}>
+                    <SectionHeader
+                      label={
+                        typeof item.label === "function"
+                          ? String(item.label() ?? "")
+                          : String(item.label ?? "")
+                      }
+                      collapsed={isSectionCollapsed}
+                      onClick={() => toggleSection(groupId)}
+                    />
+                    {!isSectionCollapsed && (
+                      <div className={styles.navSectionItems}>
+                        {children
+                          .filter((c: MenuItem) => c.visible?.() !== false)
+                          .map((child: MenuItem) => (
+                            <button
+                              key={child.id}
+                              className={`${styles.navItem}${
+                                selectedKey === child.id
+                                  ? ` ${styles.navItemActive}`
+                                  : ""
+                              }`}
+                              onClick={() =>
+                                handleMenuClick(child.id, settingsMenu)
+                              }
+                            >
+                              <span className={styles.navItemIcon}>
+                                {renderIcon(child.icon, 16)}
+                              </span>
+                              <span className={styles.navItemLabel}>
+                                {typeof child.label === "function"
+                                  ? child.label()
+                                  : child.label}
+                              </span>
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              } else if (item.divider) {
+                return <hr key={item.id} className={styles.navDivider} />;
+              } else {
+                return (
+                  <button
+                    key={item.id}
+                    className={`${styles.navItem}${
+                      selectedKey === item.id ? ` ${styles.navItemActive}` : ""
+                    }`}
+                    onClick={() => handleMenuClick(item.id, settingsMenu)}
+                  >
+                    <span className={styles.navItemIcon}>
+                      {renderIcon(item.icon, 16)}
+                    </span>
+                    <span className={styles.navItemLabel}>
+                      {typeof item.label === "function"
+                        ? item.label()
+                        : item.label}
+                    </span>
+                  </button>
+                );
+              }
+            })}
+          </div>
           <Slot name="sider.bottom" kind="fill" />
         </>
       )}

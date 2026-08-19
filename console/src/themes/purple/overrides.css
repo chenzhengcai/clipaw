@@ -1,0 +1,2033 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Purple Theme — Global Style Overrides
+   ─────────────────────────────────────────────────────────────────────────────
+   覆盖源码 layout.css 和 .module.less 中的硬编码颜色值。
+
+   关键设计：所有规则都在 html[data-theme="purple"] 作用域下，
+   当 JS 移除 data-theme 属性时，所有覆盖自动失效，回到官方默认样式。
+
+   原则：
+   1. 覆盖所有 #ff7f16 橙色引用 → 紫色
+   2. 覆盖侧边栏/Header 的 #f9f8f4 暖灰背景 → #f8f7fc 淡紫灰
+   3. 覆盖暗色模式下的 #1a1a1a → #141418 带紫调的暗黑
+   4. 使用 CSS 变量引用 tokens.css 中定义的值
+   5. 选择器优先级刚好够覆盖源码即可
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   一、全局基础
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="purple"] body {
+  background: var(--color-bg-base, #f8f7fc);
+}
+
+html[data-theme="purple"] .qwenpaw-layout,
+html[data-theme="purple"] .ant-layout,
+html[data-theme="purple"] .ant-layout-content {
+  background: var(--color-bg-base, #f8f7fc);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二、侧边栏 — 背景色覆盖（#f9f8f4 → #f8f7fc）
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="purple"] .qwenpaw-layout-sider,
+html[data-theme="purple"] .ant-layout-sider {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* Header 背景 */
+html[data-theme="purple"] .qwenpaw-layout-header,
+html[data-theme="purple"] .ant-layout-header {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* agentScopedSection — 源码中 rgba(43, 18, 0, 0.02) */
+html[data-theme="purple"] [class*="agentScopedSection"] {
+  background: var(--color-bg-inset, rgba(124, 92, 252, 0.03)) !important;
+  border-color: var(--color-primary-border, rgba(124, 92, 252, 0.12)) !important;
+}
+
+/* agentSelectorContainer — 源码中 #f9f7f3 */
+html[data-theme="purple"] [class*="agentSelectorContainer"] {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* collapseToggleContainer — 源码中 #f9f8f4 */
+html[data-theme="purple"] [class*="collapseToggleContainer"] {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   三、菜单项 — 选中/hover 紫色高亮（覆盖所有橙色引用）
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 选中态 — 源码中 rgba(43, 18, 0, 0.08) */
+html[data-theme="purple"] .qwenpaw-menu-item-selected,
+html[data-theme="purple"] .qwenpaw-menu-item:where(.qwenpaw-menu-item-selected),
+html[data-theme="purple"] .ant-menu-item-selected {
+  background-color: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-menu-item:hover,
+html[data-theme="purple"] .ant-menu-item:hover {
+  background-color: var(--color-primary-bg-hover, rgba(124, 92, 252, 0.12)) !important;
+}
+
+/* stickyChatButton 选中态 — 源码中 rgba(43, 18, 0, 0.08) */
+html[data-theme="purple"] [class*="stickyChatButtonActive"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   四、折叠按钮 / 模式切换 — 橙色 → 紫色
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* collapseBtn — 源码中 color: #ff7f16 */
+html[data-theme="purple"] [class*="collapseBtn"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* collapseToggle hover — 源码中 color: #ff7f16 */
+html[data-theme="purple"] [class*="collapseToggle"]:hover {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* modeToggleActive — 源码中 color: #ff7f16, bg: rgba(255,127,22,0.08) */
+html[data-theme="purple"] [class*="modeToggleActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* collapsedNavItemActive — 源码中 rgba(43, 18, 0, 0.08) */
+html[data-theme="purple"] [class*="collapsedNavItemActive"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   五、Simple 模式 — 新建聊天 / 导航项 / 会话列表
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* simpleNewChat — 源码中 bg: rgba(255,127,22,0.08), color: #ff7f16 */
+html[data-theme="purple"] [class*="simpleNewChat"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="simpleNewChat"]:hover {
+  background: var(--color-primary-bg-hover, rgba(124, 92, 252, 0.12)) !important;
+}
+
+/* simpleNavItemActive — 源码中 rgba(43, 18, 0, 0.08) */
+html[data-theme="purple"] [class*="simpleNavItemActive"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* simpleSessionItemActive — 源码中 rgba(43, 18, 0, 0.08) */
+html[data-theme="purple"] [class*="simpleSessionItemActive"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* simpleSessionActionBtnActive — 源码中 #ff7f16 */
+html[data-theme="purple"] [class*="simpleSessionActionBtnActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   六、版本号 / Update Modal — 橙色 → 紫色
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* versionBadge — 源码中暗色模式 color: #ff7f16 */
+html[data-theme="purple"] [class*="versionBadge"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* updateModalBannerTitle — 源码中 color: #ff7f16 */
+html[data-theme="purple"] [class*="updateModalBannerTitle"],
+html[data-theme="purple"] [class*="updateModalTitle"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* updateViewReleasesBtn — 源码中 bg: #ff7f16 */
+html[data-theme="purple"] [class*="updateViewReleasesBtn"] {
+  background: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="updateViewReleasesBtn"]:hover {
+  background: var(--color-primary-hover, #6b4fe8) !important;
+  border-color: var(--color-primary-hover, #6b4fe8) !important;
+}
+
+/* updateModalPrimaryBtn — 源码中 bg: #ff7f16 */
+html[data-theme="purple"] [class*="updateModalPrimaryBtn"] {
+  background: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   七、Ant Design 组件 — 全局紫色覆盖
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 按钮 ─────────────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-btn-primary,
+html[data-theme="purple"] .ant-btn-primary {
+  background: var(--color-primary, #7c5cfc);
+  border-color: var(--color-primary, #7c5cfc);
+  box-shadow: 0 2px 6px rgba(124, 92, 252, 0.3);
+}
+
+html[data-theme="purple"] .qwenpaw-btn-primary:hover,
+html[data-theme="purple"] .ant-btn-primary:hover {
+  background: var(--color-primary-hover, #6b4fe8) !important;
+  border-color: var(--color-primary-hover, #6b4fe8) !important;
+  box-shadow: 0 4px 12px rgba(124, 92, 252, 0.35) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-btn-primary:active,
+html[data-theme="purple"] .ant-btn-primary:active {
+  background: var(--color-primary-active, #5a42d4) !important;
+  border-color: var(--color-primary-active, #5a42d4) !important;
+}
+
+/* 恢复 text-variant 按钮的透明背景（如聊天发送/停止按钮）。
+   antd 5 中 variant="text" 生成的 class 是 `-btn-variant-text`，不是 `-btn-text`。 */
+html[data-theme="purple"] .qwenpaw-btn-primary.qwenpaw-btn-variant-text,
+html[data-theme="purple"] .ant-btn-primary.ant-btn-variant-text {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+html[data-theme="purple"] .qwenpaw-btn-primary.qwenpaw-btn-variant-text:hover,
+html[data-theme="purple"] .ant-btn-primary.ant-btn-variant-text:hover {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* ─── 链接色 ───────────────────────────────────────────────────────────── */
+html[data-theme="purple"] a {
+  color: var(--color-primary, #7c5cfc);
+}
+
+html[data-theme="purple"] a:hover {
+  color: var(--color-primary-hover, #6b4fe8);
+}
+
+/* ─── Switch 开关 ──────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-switch-checked,
+html[data-theme="purple"] .ant-switch-checked {
+  background: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── Tabs 标签页 ──────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-tabs-tab-active,
+html[data-theme="purple"] .ant-tabs-tab-active {
+  background: rgba(124, 92, 252, 0.08) !important;
+  border-color: rgba(124, 92, 252, 0.18) !important;
+  box-shadow: 0 1px 4px rgba(124, 92, 252, 0.12) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-tabs-tab-active .qwenpaw-tabs-tab-btn,
+html[data-theme="purple"] .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #7c5cfc !important;
+}
+
+html[data-theme="purple"] .qwenpaw-tabs-ink-bar,
+html[data-theme="purple"] .ant-tabs-ink-bar {
+  background: #7c5cfc !important;
+}
+
+html[data-theme="purple"] .qwenpaw-tabs-tab:hover .qwenpaw-tabs-tab-btn,
+html[data-theme="purple"] .ant-tabs-tab:hover .ant-tabs-tab-btn {
+  color: #6b4fe8 !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-tabs-tab-active,
+html[data-theme="purple"].dark-mode .ant-tabs-tab-active {
+  background: rgba(167, 139, 250, 0.12) !important;
+  border-color: rgba(167, 139, 250, 0.22) !important;
+  box-shadow: 0 1px 4px rgba(167, 139, 250, 0.18) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-tabs-tab-active .qwenpaw-tabs-tab-btn,
+html[data-theme="purple"].dark-mode .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #a78bfa !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-tabs-ink-bar,
+html[data-theme="purple"].dark-mode .ant-tabs-ink-bar {
+  background: #a78bfa !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-tabs-tab:hover .qwenpaw-tabs-tab-btn,
+html[data-theme="purple"].dark-mode .ant-tabs-tab:hover .ant-tabs-tab-btn {
+  color: #b9a0fb !important;
+}
+
+/* ─── Checkbox / Radio ─────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-checkbox-checked .qwenpaw-checkbox-inner,
+html[data-theme="purple"] .ant-checkbox-checked .ant-checkbox-inner {
+  background-color: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-radio-checked .qwenpaw-radio-inner,
+html[data-theme="purple"] .ant-radio-checked .ant-radio-inner {
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+/* NOTE: DO NOT override radio-inner::after background-color.
+   antd 5 sets radio-inner background = colorPrimary (solid purple fill)
+   and ::after background = colorWhite (white dot for contrast).
+   Overriding ::after to purple makes the dot invisible against the fill. */
+
+/* ─── Input / Select focus ─────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-input:focus,
+html[data-theme="purple"] .qwenpaw-input-focused,
+html[data-theme="purple"] .qwenpaw-input-affix-wrapper:focus,
+html[data-theme="purple"] .qwenpaw-input-affix-wrapper-focused,
+html[data-theme="purple"] .ant-input:focus,
+html[data-theme="purple"] .ant-input-focused,
+html[data-theme="purple"] .ant-input-affix-wrapper:focus,
+html[data-theme="purple"] .ant-input-affix-wrapper-focused {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  box-shadow: 0 0 0 2px var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-select-focused .qwenpaw-select-selector,
+html[data-theme="purple"] .ant-select-focused .ant-select-selector {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  box-shadow: 0 0 0 2px var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* ─── Pagination ───────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-pagination-item-active,
+html[data-theme="purple"] .ant-pagination-item-active {
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-pagination-item-active a,
+html[data-theme="purple"] .ant-pagination-item-active a {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── Spin ─────────────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-spin-dot-item,
+html[data-theme="purple"] .ant-spin-dot-item {
+  background-color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── Badge ────────────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-badge-dot,
+html[data-theme="purple"] .ant-badge-dot {
+  background: var(--color-primary, #7c5cfc);
+}
+
+/* ─── Progress ─────────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-progress-bg,
+html[data-theme="purple"] .ant-progress-bg {
+  background-color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── Slider ───────────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-slider-track,
+html[data-theme="purple"] .ant-slider-track {
+  background-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-slider-handle::after,
+html[data-theme="purple"] .ant-slider-handle::after {
+  box-shadow: 0 0 0 2px var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── Select 选中项文字色 ──────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-select-item-option-selected,
+html[data-theme="purple"] .ant-select-item-option-selected {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── DatePicker 今日/选中 ─────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-picker-cell-today .qwenpaw-picker-cell-inner::before,
+html[data-theme="purple"] .ant-picker-cell-today .ant-picker-cell-inner::before {
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-picker-cell-selected .qwenpaw-picker-cell-inner,
+html[data-theme="purple"] .ant-picker-cell-selected .ant-picker-cell-inner {
+  background: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── Table 排序图标 ───────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-table-column-sorter-up.active,
+html[data-theme="purple"] .qwenpaw-table-column-sorter-down.active,
+html[data-theme="purple"] .ant-table-column-sorter-up.active,
+html[data-theme="purple"] .ant-table-column-sorter-down.active {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── Tag purple 增强 ──────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-tag-purple,
+html[data-theme="purple"] .ant-tag-purple {
+  color: var(--color-primary, #7c5cfc);
+  border-color: var(--color-primary-border, rgba(124, 92, 252, 0.2));
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08));
+}
+
+/* ─── Segmented 选中态 ─────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-segmented-item-selected,
+html[data-theme="purple"] .ant-segmented-item-selected {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── Steps 进度条 ─────────────────────────────────────────────────────── */
+html[data-theme="purple"] .qwenpaw-steps-item-finish .qwenpaw-steps-item-icon,
+html[data-theme="purple"] .ant-steps-item-finish .ant-steps-item-icon {
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] .qwenpaw-steps-item-process .qwenpaw-steps-item-icon,
+html[data-theme="purple"] .ant-steps-item-process .ant-steps-item-icon {
+  background: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   八、未读通知圆点 — 橙色 → 紫色
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Sidebar.tsx 和 Header.tsx 中内联 style={{ color: "rgba(255, 157, 77, 1)" }} 的 Badge 
+   无法通过 CSS 覆盖，但 antd Badge 组件可以 */
+html[data-theme="purple"] .qwenpaw-badge-status-processing,
+html[data-theme="purple"] .ant-badge-status-processing {
+  background: var(--color-primary, #7c5cfc);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   九、暗色模式 — 全量覆盖
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="purple"].dark-mode body {
+  background: var(--color-bg-base, #141418);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-layout,
+html[data-theme="purple"].dark-mode .ant-layout,
+html[data-theme="purple"].dark-mode .ant-layout-content {
+  background: var(--color-bg-base, #141418);
+}
+
+/* ─── 暗色侧边栏 ──────────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-layout-sider,
+html[data-theme="purple"].dark-mode .ant-layout-sider {
+  background: var(--color-bg-base, #141418) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-layout-header,
+html[data-theme="purple"].dark-mode .ant-layout-header {
+  background: var(--color-bg-base, #141418) !important;
+}
+
+/* 暗色 agentScopedSection */
+html[data-theme="purple"].dark-mode [class*="agentScopedSection"] {
+  background: var(--color-bg-inset, rgba(167, 139, 250, 0.06)) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* 暗色 agentSelectorContainer — 源码中 #1e1e1e */
+html[data-theme="purple"].dark-mode [class*="agentSelectorContainer"] {
+  background: var(--color-bg-elevated, #1e1e24) !important;
+}
+
+/* 暗色 collapseToggleContainer — 源码中 #1a1a1a */
+html[data-theme="purple"].dark-mode [class*="collapseToggleContainer"] {
+  background: var(--color-bg-base, #141418) !important;
+}
+
+/* ─── 暗色菜单选中/hover ──────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-menu {
+  background: var(--color-bg-base, #141418) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-menu-item-selected,
+html[data-theme="purple"].dark-mode .ant-menu-item-selected {
+  background-color: var(--color-primary-bg, rgba(167, 139, 250, 0.15)) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-menu-item:hover,
+html[data-theme="purple"].dark-mode .ant-menu-item:hover {
+  background-color: var(--color-primary-bg-hover, rgba(167, 139, 250, 0.2)) !important;
+}
+
+/* ─── 暗色 stickyChatButton ───────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="stickyChatButtonActive"] {
+  background: var(--color-primary-bg, rgba(167, 139, 250, 0.15)) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色折叠按钮 ────────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="collapseBtn"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="collapseToggle"]:hover {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="modeToggleActive"] {
+  color: var(--color-primary, #a78bfa) !important;
+  background: var(--color-primary-bg, rgba(167, 139, 250, 0.15)) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="collapsedNavItemActive"] {
+  background: var(--color-primary-bg, rgba(167, 139, 250, 0.15)) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色版本号 ──────────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="versionBadge"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色 Simple 模式 ────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="simpleNewChat"] {
+  background: var(--color-primary-bg, rgba(167, 139, 250, 0.15)) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="simpleNewChat"]:hover {
+  background: var(--color-primary-bg-hover, rgba(167, 139, 250, 0.2)) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="simpleNavItemActive"] {
+  background: var(--color-primary-bg, rgba(167, 139, 250, 0.15)) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="simpleSessionItemActive"] {
+  background: var(--color-primary-bg, rgba(167, 139, 250, 0.15)) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="simpleSessionActionBtnActive"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色卡片/面板背景 ───────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-card,
+html[data-theme="purple"].dark-mode .ant-card,
+html[data-theme="purple"].dark-mode .qwenpaw-modal-content,
+html[data-theme="purple"].dark-mode .ant-modal-content,
+html[data-theme="purple"].dark-mode .qwenpaw-drawer-content,
+html[data-theme="purple"].dark-mode .ant-drawer-content {
+  background: var(--color-bg-elevated, #1e1e24);
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-dropdown-menu,
+html[data-theme="purple"].dark-mode .ant-dropdown-menu,
+html[data-theme="purple"].dark-mode .qwenpaw-popover-inner,
+html[data-theme="purple"].dark-mode .ant-popover-inner {
+  background: var(--color-bg-elevated, #1e1e24);
+}
+
+/* ─── 暗色 update modal ───────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="updateModalBannerTitle"],
+html[data-theme="purple"].dark-mode [class*="updateModalTitle"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="updateViewReleasesBtn"] {
+  background: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="updateModalPrimaryBtn"] {
+  background: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色 Select 选中项 ──────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-select-item-option-selected,
+html[data-theme="purple"].dark-mode .ant-select-item-option-selected {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色 DatePicker ─────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-today .qwenpaw-picker-cell-inner::before,
+html[data-theme="purple"].dark-mode .ant-picker-cell-today .ant-picker-cell-inner::before {
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-selected .qwenpaw-picker-cell-inner,
+html[data-theme="purple"].dark-mode .ant-picker-cell-selected .ant-picker-cell-inner {
+  background: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色 Slider ─────────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-slider-track,
+html[data-theme="purple"].dark-mode .ant-slider-track {
+  background-color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-slider-handle::after,
+html[data-theme="purple"].dark-mode .ant-slider-handle::after {
+  box-shadow: 0 0 0 2px var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-slider-mark-text-active,
+html[data-theme="purple"].dark-mode .ant-slider-mark-text-active {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色 Checkbox / Radio ─────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-checkbox-checked .qwenpaw-checkbox-inner,
+html[data-theme="purple"].dark-mode .ant-checkbox-checked .ant-checkbox-inner {
+  background-color: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-radio-checked .qwenpaw-radio-inner,
+html[data-theme="purple"].dark-mode .ant-radio-checked .ant-radio-inner {
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+/* NOTE: DO NOT override radio-inner::after background in dark mode.
+   Same reason as light mode — dot should remain white for contrast. */
+
+html[data-theme="purple"].dark-mode .qwenpaw-pagination-item-active,
+html[data-theme="purple"].dark-mode .ant-pagination-item-active {
+  background: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-pagination-item-active a,
+html[data-theme="purple"].dark-mode .ant-pagination-item-active a {
+  color: #fff !important;
+}
+
+/* ─── 暗色 Table 排序 ─────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-table-column-sorter-up.active,
+html[data-theme="purple"].dark-mode .qwenpaw-table-column-sorter-down.active,
+html[data-theme="purple"].dark-mode .ant-table-column-sorter-up.active,
+html[data-theme="purple"].dark-mode .ant-table-column-sorter-down.active {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色 Steps ──────────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode .qwenpaw-steps-item-process .qwenpaw-steps-item-icon,
+html[data-theme="purple"].dark-mode .ant-steps-item-process .ant-steps-item-icon {
+  background: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 暗色链接色 ──────────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode a {
+  color: var(--color-primary, #a78bfa);
+}
+
+html[data-theme="purple"].dark-mode a:hover {
+  color: var(--color-primary-hover, #b9a0fb);
+}
+
+/* Chat 消息内链接 */
+html[data-theme="purple"].dark-mode [class*="chat-anywhere"] [class*="message"] a {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   十、全局美化增强
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 卡片悬浮阴影 */
+html[data-theme="purple"] .qwenpaw-card:hover,
+html[data-theme="purple"] .ant-card:hover {
+  box-shadow: 0 2px 12px rgba(124, 92, 252, 0.08);
+  transition: box-shadow 0.3s ease;
+}
+
+/* 按钮过渡动画增强 */
+html[data-theme="purple"] .qwenpaw-btn,
+html[data-theme="purple"] .ant-btn {
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 全局滚动条美化 */
+html[data-theme="purple"] ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+html[data-theme="purple"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html[data-theme="purple"] ::-webkit-scrollbar-thumb {
+  background: rgba(124, 92, 252, 0.15);
+  border-radius: 3px;
+}
+
+html[data-theme="purple"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(124, 92, 252, 0.3);
+}
+
+html[data-theme="purple"].dark-mode ::-webkit-scrollbar-thumb {
+  background: rgba(167, 139, 250, 0.2);
+}
+
+html[data-theme="purple"].dark-mode ::-webkit-scrollbar-thumb:hover {
+  background: rgba(167, 139, 250, 0.35);
+}
+
+/* 设置面板中的选中态 — 覆盖 #fff7e6 / #ff9d4d 回退色 */
+html[data-theme="purple"] [class*="sidebarSettingsPanel"] [class*="active"],
+html[data-theme="purple"] [class*="sidebarSettingsPanel"] [class*="selected"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   十一、Chat 聊天框相关 — 全面紫色覆盖
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 11.1 Chat 页面 — suggestionCommand 建议命令（#ff7f16 → 紫色）────── */
+html[data-theme="purple"] [class*="suggestionCommand"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* prompt-icon 星标图标 */
+html[data-theme="purple"] .chat-anywhere-prompt-icon,
+html[data-theme="purple"] [class*="prompt-icon"],
+html[data-theme="purple"] [class*="PromptIcon"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 11.2 ModelSelector 模型选择器 — 全部橙色 → 紫色 ─────────────────── */
+
+/* trigger 触发按钮 hover/active 态 */
+html[data-theme="purple"] [class*="trigger"]:hover,
+html[data-theme="purple"] [class*="triggerActive"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* trigger 箭头展开态 */
+html[data-theme="purple"] [class*="triggerArrowOpen"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* tabButton 激活态 */
+html[data-theme="purple"] [class*="tabButtonActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="tabButtonActive"]::after {
+  background: var(--color-primary, #7c5cfc) !important;
+}
+
+/* modelItem 选中态 */
+html[data-theme="purple"] [class*="modelItemActive"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="modelItemActive"] [class*="modelName"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* modelItem hover 态 */
+html[data-theme="purple"] [class*="modelItem"]:hover {
+  background: var(--color-primary-bg-hover, rgba(124, 92, 252, 0.06)) !important;
+}
+
+/* checkIcon 选中勾 */
+html[data-theme="purple"] [class*="checkIcon"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 11.3 ChatSessionDrawer — 会话抽屉面板 ───────────────────────────── */
+
+/* createButton 新建按钮 */
+html[data-theme="purple"] [class*="createButton"] {
+  background: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="createButton"]:hover {
+  background: var(--color-primary-hover, #6b4fe8) !important;
+  border-color: var(--color-primary-hover, #6b4fe8) !important;
+}
+
+/* pinActive 固定会话激活态 */
+html[data-theme="purple"] [class*="pinActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 11.4 ChatSessionItem — 会话列表项 ───────────────────────────────── */
+
+/* pinButton 固定按钮已固定状态 */
+html[data-theme="purple"] [class*="pinButton"][data-pinned="true"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* 会话项 active 选中态 */
+html[data-theme="purple"] [class*="ChatSessionItem"][class*="active"],
+html[data-theme="purple"] [class*="sessionItem"][class*="active"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* channelTag 频道标签 */
+html[data-theme="purple"] [class*="channelTag"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.06)) !important;
+}
+
+/* ─── 11.5 ChatActionGroup — 操作按钮组 ───────────────────────────────── */
+html[data-theme="purple"] [class*="ChatActionGroup"] [class*="active"],
+html[data-theme="purple"] [class*="chatAction"][class*="active"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 11.6 Chat message list anchor nav button — 紫色主题覆盖 ─────────── */
+html[data-theme="purple"] [class*="message-list-anchor-nav-button"] {
+  color: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="message-list-anchor-nav-button"]:hover,
+html[data-theme="purple"] [class*="message-list-anchor-nav-button"][aria-expanded="true"] {
+  color: var(--color-primary-hover, #6b4fe8) !important;
+  border-color: var(--color-primary-hover, #6b4fe8) !important;
+}
+
+html[data-theme="purple"] [class*="message-list-anchor-nav-button"] [class*="badge"] {
+  background: var(--color-primary, #7c5cfc) !important;
+  color: #fff !important;
+}
+
+/* message-list-anchor-nav-count — 导航按钮数字徽标 */
+html[data-theme="purple"] [class*="message-list-anchor-nav-count"] {
+  background: var(--color-primary, #7c5cfc) !important;
+  color: #fff !important;
+}
+
+html[data-theme="purple"] [class*="message-list-anchor-nav-button-active"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* message-list-anchor-directory-item-active — 左侧指示条/激活态 */
+html[data-theme="purple"] [class*="message-list-anchor-directory-item-active"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  box-shadow: inset 3px 0 0 var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="message-list-anchor-directory-item-active"] [class*="message-list-anchor-directory-message"],
+html[data-theme="purple"] [class*="message-list-anchor-directory-item-active"] [class*="message-list-anchor-directory-time"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 11.6 chat-anywhere 消息区域 — 链接色和主色覆盖 ──────────────────── */
+
+/* 消息中的链接色 */
+html[data-theme="purple"] [class*="chat-anywhere"] [class*="message"] a {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="chat-anywhere"] [class*="message"] a:hover {
+  color: var(--color-primary-hover, #6b4fe8) !important;
+}
+
+/* ─── 11.7 聊天输入框 — 紫色聚焦态增强 ───────────────────────────────── */
+
+/* Sender 输入框 — 确保白色背景不被覆盖 */
+html[data-theme="purple"] .qwenpaw-sender,
+html[data-theme="purple"] .qwenpaw-sender-content {
+  background: #fff !important;
+}
+
+/* Sender 输入框聚焦态 */
+html[data-theme="purple"] .qwenpaw-sender:focus-within,
+html[data-theme="purple"] .qwenpaw-sender-content:focus-within {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  box-shadow: 0 0 0 2px rgba(124, 92, 252, 0.12) !important;
+}
+
+/* 发送/停止按钮 — 去掉 color 覆盖，让 antd 自行处理图标颜色，避免与聚焦紫光环融为一体 */
+/* (sender-actions 按钮的 color 已由 antd text-variant 默认处理：text 按钮用 colorText，primary+text 按钮用 colorPrimary) */
+
+/* ─── 11.8 聊天气泡 — 紫色风格增强 ───────────────────────────────────── */
+
+/* AI 回复气泡左侧装饰线 */
+html[data-theme="purple"] [class*="bubble-start"]::before,
+html[data-theme="purple"] .qwenpaw-bubble [class*="bubble-start"]::before {
+  background: var(--color-primary-gradient, linear-gradient(135deg, #7c5cfc 0%, #a78bfa 100%)) !important;
+}
+
+/* 用户消息气泡 — 淡紫色背景（仅气泡本身，不包含 wrapper 全宽容器） */
+html[data-theme="purple"] [class*="bubble-end"] .qwenpaw-bubble-content-filled,
+html[data-theme="purple"] .qwenpaw-bubble[class*="bubble-end"] .qwenpaw-bubble-content-filled {
+  background: #7c5cfc0f !important;
+  border: 1px solid rgba(124, 92, 252, 0.12) !important;
+}
+
+/* ─── 11.9 chat-anywhere 输入区域背景 — 淡紫色调 ──────────────────────── */
+html[data-theme="purple"] .qwenpaw-chat-anywhere-input,
+html[data-theme="purple"] [class*="chat-anywhere-input"] {
+  background: #faf9fe !important;
+}
+
+html[data-theme="purple"] .qwenpaw-chat-anywhere-message-list-welcome {
+  background: #faf9fe !important;
+}
+
+/* 消息列表背景 */
+html[data-theme="purple"] .qwenpaw-bubble-list-wrapper {
+  background: #fdfcff !important;
+}
+
+/* ─── 11.10 layout.css 中 chat-anywhere 暗色模式 — 橙色链接 → 紫色 ──── */
+html[data-theme="purple"].dark-mode [class*="chat-anywhere"] [class*="message"] a {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="chat-anywhere"] [class*="message"] a:hover {
+  color: var(--color-primary-hover, #b9a0fb) !important;
+}
+
+/* ─── 11.11 暗色模式 Chat 聊天框全面覆盖 ──────────────────────────────── */
+
+/* 暗色 suggestionCommand */
+html[data-theme="purple"].dark-mode [class*="suggestionCommand"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 prompt-icon */
+html[data-theme="purple"].dark-mode .chat-anywhere-prompt-icon,
+html[data-theme="purple"].dark-mode [class*="prompt-icon"],
+html[data-theme="purple"].dark-mode [class*="PromptIcon"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 ModelSelector trigger */
+html[data-theme="purple"].dark-mode [class*="trigger"]:hover,
+html[data-theme="purple"].dark-mode [class*="triggerActive"] {
+  color: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="triggerArrowOpen"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 tabButton 激活态 */
+html[data-theme="purple"].dark-mode [class*="tabButtonActive"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="tabButtonActive"]::after {
+  background: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 modelItem 选中态 */
+html[data-theme="purple"].dark-mode [class*="modelItemActive"] {
+  background: rgba(167, 139, 250, 0.15) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="modelItemActive"] [class*="modelName"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="modelItem"]:hover {
+  background: rgba(167, 139, 250, 0.1) !important;
+}
+
+/* 暗色 checkIcon */
+html[data-theme="purple"].dark-mode [class*="checkIcon"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 ChatSessionDrawer createButton */
+html[data-theme="purple"].dark-mode [class*="createButton"] {
+  background: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 pinActive / pinButton */
+html[data-theme="purple"].dark-mode [class*="pinActive"],
+html[data-theme="purple"].dark-mode [class*="pinButton"][data-pinned="true"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色会话项 active */
+html[data-theme="purple"].dark-mode [class*="ChatSessionItem"][class*="active"],
+html[data-theme="purple"].dark-mode [class*="sessionItem"][class*="active"] {
+  background: rgba(167, 139, 250, 0.12) !important;
+}
+
+/* 暗色 ChatActionGroup */
+html[data-theme="purple"].dark-mode [class*="ChatActionGroup"] [class*="active"],
+html[data-theme="purple"].dark-mode [class*="chatAction"][class*="active"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 Sender 输入框聚焦态 */
+html[data-theme="purple"].dark-mode .qwenpaw-sender:focus-within,
+html[data-theme="purple"].dark-mode .qwenpaw-sender-content:focus-within {
+  border-color: var(--color-primary, #a78bfa) !important;
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.15) !important;
+}
+
+
+/* 暗色 primary variant=text 按钮（如聊天发送/停止按钮 — 透明背景 + 紫色图标） */
+html[data-theme="purple"].dark-mode .qwenpaw-btn-primary.qwenpaw-btn-variant-text,
+html[data-theme="purple"].dark-mode .ant-btn-primary.ant-btn-variant-text {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+html[data-theme="purple"].dark-mode .qwenpaw-btn-primary.qwenpaw-btn-variant-text:hover,
+html[data-theme="purple"].dark-mode .ant-btn-primary.ant-btn-variant-text:hover {
+  background: rgba(167, 139, 250, 0.12) !important;
+}
+
+/* 暗色用户消息气泡（仅气泡本身） */
+html[data-theme="purple"].dark-mode [class*="bubble-end"] .qwenpaw-bubble-content-filled,
+html[data-theme="purple"].dark-mode .qwenpaw-bubble[class*="bubble-end"] .qwenpaw-bubble-content-filled {
+  background: rgba(167, 139, 250, 0.1) !important;
+  border: 1px solid rgba(167, 139, 250, 0.18) !important;
+}
+
+/* 暗色 chat-anywhere 输入区域背景 */
+html[data-theme="purple"].dark-mode .qwenpaw-chat-anywhere-input,
+html[data-theme="purple"].dark-mode [class*="chat-anywhere-input"],
+html[data-theme="purple"].dark-mode [class*="qwenpaw-chat-anywhere-default-footer"],
+html[data-theme="purple"].dark-mode [class*="chat-anywhere-footer"] {
+  background: var(--color-bg-base, #141418) !important;
+}
+
+/* 暗色消息列表背景 */
+html[data-theme="purple"].dark-mode .qwenpaw-chat-anywhere,
+html[data-theme="purple"].dark-mode .qwenpaw-chat-anywhere-message-list,
+html[data-theme="purple"].dark-mode .qwenpaw-bubble-list-wrapper {
+  background: var(--color-bg-base, #141418) !important;
+}
+
+/* 暗色欢迎页背景 */
+html[data-theme="purple"].dark-mode .qwenpaw-chat-anywhere-welcome-default,
+html[data-theme="purple"].dark-mode .qwenpaw-chat-anywhere-message-list-welcome {
+  background: var(--color-bg-base, #141418) !important;
+}
+
+/* 暗色 Sender 输入框背景 */
+html[data-theme="purple"].dark-mode .qwenpaw-sender,
+html[data-theme="purple"].dark-mode .qwenpaw-sender-content {
+  background: var(--color-bg-elevated, #1e1e24) !important;
+  border-color: rgba(167, 139, 250, 0.15) !important;
+}
+
+/* 暗色 ModelSelector 面板背景 */
+html[data-theme="purple"].dark-mode [class*="ModelSelector"] [class*="panel"],
+html[data-theme="purple"].dark-mode [class*="modelSelector"] [class*="panel"] {
+  background: var(--color-bg-elevated, #1e1e24) !important;
+  border-color: rgba(167, 139, 250, 0.1) !important;
+}
+
+/* ─── 11.12 Loading 指示器 — 紫色 ─────────────────────────────────────── */
+html[data-theme="purple"] [class*="ModelSelector"] :global(.anticon-loading),
+html[data-theme="purple"] [class*="modelSelector"] :global(.anticon-loading) {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="ModelSelector"] :global(.anticon-loading),
+html[data-theme="purple"].dark-mode [class*="modelSelector"] :global(.anticon-loading) {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   十二、AgentSelector 智能体选择器 — 橙色 → 紫色覆盖
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 12.1 基础容器 ────────────────────────────────────────────────────── */
+html[data-theme="purple"] [class*="agentSelectorWrapper"] {
+  border-color: rgba(124, 92, 252, 0.1) !important;
+}
+
+/* ─── 12.2 折叠态图标 ──────────────────────────────────────────────────── */
+html[data-theme="purple"] [class*="agentSelectorCollapsed"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  border-color: var(--color-primary-border, rgba(124, 92, 252, 0.2)) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="agentSelectorCollapsed"]:hover {
+  background: var(--color-primary-bg-hover, rgba(124, 92, 252, 0.12)) !important;
+  border-color: rgba(124, 92, 252, 0.35) !important;
+}
+
+/* ─── 12.3 管理链接 ────────────────────────────────────────────────────── */
+html[data-theme="purple"] [class*="managementLink"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="managementLink"]:hover {
+  color: var(--color-primary-hover, #6b4fe8) !important;
+}
+
+/* ─── 12.4 已选中 Agent 标签中的图标 ───────────────────────────────────── */
+html[data-theme="purple"] [class*="selectedAgentLabel"] svg {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 12.5 Agent 选项图标 — 橙色渐变 → 紫色渐变 ────────────────────────── */
+html[data-theme="purple"] [class*="agentOptionIcon"] {
+  background: linear-gradient(135deg, #f5f0ff 0%, #ede4ff 100%) !important;
+  border-color: rgba(124, 92, 252, 0.15) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="agentOption"]:hover [class*="agentOptionIcon"] {
+  background: linear-gradient(135deg, #ede4ff 0%, #e4d6ff 100%) !important;
+  border-color: rgba(124, 92, 252, 0.3) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+  box-shadow: 0 2px 6px rgba(124, 92, 252, 0.15) !important;
+}
+
+/* 下拉菜单中选中项的图标 — 实心紫色 */
+html[data-theme="purple"] [class*="agentSelectorDropdown"] [class*="select-item-option-selected"] [class*="agentOptionIcon"],
+html[data-theme="purple"] [class*="agentSelectorDropdown"] [class*="select-item-option-selected"] .agentOptionIcon {
+  background: var(--color-primary-gradient, linear-gradient(135deg, #7c5cfc 0%, #a78bfa 100%)) !important;
+  border-color: transparent !important;
+  color: #ffffff !important;
+  box-shadow: 0 2px 8px rgba(124, 92, 252, 0.4) !important;
+}
+
+/* ─── 12.6 选中指示器 (check icon) ──────────────────────────────────────── */
+html[data-theme="purple"] [class*="activeIndicator"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 12.7 Agent ID 文字 ───────────────────────────────────────────────── */
+html[data-theme="purple"] [class*="agentOptionId"] {
+  color: rgba(124, 92, 252, 0.45) !important;
+  border-top-color: rgba(124, 92, 252, 0.08) !important;
+}
+
+/* ─── 12.8 下拉菜单 hover / selected 背景 ───────────────────────────────── */
+html[data-theme="purple"] [class*="agentSelectorDropdown"] [class*="select-item"]:hover {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.06)) !important;
+}
+
+html[data-theme="purple"] [class*="agentSelectorDropdown"] [class*="select-item-option-selected"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.06)) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   十三、AgentSelector 暗色模式覆盖
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 13.1 基础容器 ────────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="agentSelectorWrapper"] {
+  border-color: rgba(167, 139, 250, 0.12) !important;
+}
+
+/* ─── 13.2 折叠态图标 ──────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="agentSelectorCollapsed"] {
+  background: rgba(167, 139, 250, 0.12) !important;
+  border-color: rgba(167, 139, 250, 0.2) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="agentSelectorCollapsed"]:hover {
+  background: rgba(167, 139, 250, 0.18) !important;
+  border-color: rgba(167, 139, 250, 0.35) !important;
+}
+
+/* ─── 13.3 管理链接 ────────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="managementLink"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="managementLink"]:hover {
+  color: var(--color-primary-hover, #b9a0fb) !important;
+}
+
+/* ─── 13.4 已选中 Agent 标签中的图标 ───────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="selectedAgentLabel"] svg {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 13.5 Agent 选项图标 ──────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="agentOptionIcon"] {
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.15) 0%, rgba(167, 139, 250, 0.08) 100%) !important;
+  border-color: rgba(167, 139, 250, 0.2) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="agentOption"]:hover [class*="agentOptionIcon"] {
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.3) 0%, rgba(167, 139, 250, 0.15) 100%) !important;
+  border-color: rgba(167, 139, 250, 0.4) !important;
+  color: #c4b5fd !important;
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.3) !important;
+}
+
+/* 下拉菜单中选中项的图标 — 实心紫色 */
+html[data-theme="purple"].dark-mode [class*="agentSelectorDropdown"] [class*="select-item-option-selected"] [class*="agentOptionIcon"] {
+  background: var(--color-primary-gradient, linear-gradient(135deg, #a78bfa 0%, #c4b5fd 100%)) !important;
+  border-color: transparent !important;
+  color: #ffffff !important;
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.5) !important;
+}
+
+/* ─── 13.6 选中指示器 ──────────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="activeIndicator"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 13.7 Agent ID 文字 ───────────────────────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="agentOptionId"] {
+  color: rgba(167, 139, 250, 0.5) !important;
+  border-top-color: rgba(167, 139, 250, 0.12) !important;
+}
+
+/* ─── 13.8 下拉菜单 hover / selected 背景 ───────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="agentSelectorDropdown"] [class*="select-item"]:hover {
+  background: rgba(167, 139, 250, 0.1) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="agentSelectorDropdown"] [class*="select-item-option-selected"] {
+  background: rgba(167, 139, 250, 0.1) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   十四、精简模式侧边栏 — 新建聊天按钮 / 折叠态激活项 → 紫色覆盖
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 14.1 精简模式「新建聊天」按钮 — 实心橙色 → 紫色 ───────────────── */
+html[data-theme="purple"] [class*="newChatBtn"] {
+  background: var(--color-primary, #7c5cfc) !important;
+  color: #fff !important;
+}
+
+html[data-theme="purple"] [class*="newChatBtn"]:hover {
+  background: var(--color-primary-hover, #6b4fe8) !important;
+}
+
+/* ─── 14.2 暗色精简模式「新建聊天」按钮 ───────────────────────────────── */
+html[data-theme="purple"].dark-mode [class*="newChatBtn"] {
+  background: var(--color-primary, #a78bfa) !important;
+  color: #fff !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="newChatBtn"]:hover {
+  background: var(--color-primary-hover, #b9a0fb) !important;
+}
+
+
+/* ─── 15. Alert 组件淡紫背景（紫色主题开启时生效） ───────────────────── */
+html[data-theme="purple"] .qwenpaw-alert,
+html[data-theme="purple"] .qwenpaw-alert-warning {
+  background: rgba(124, 92, 252, 0.08) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-alert,
+html[data-theme="purple"].dark-mode .qwenpaw-alert-warning {
+  background: rgba(167, 139, 250, 0.12) !important;
+}
+
+/* ─── 16. 频道/ACP 筛选标签选中态（紫色主题） ─────────────────────────── */
+html[data-theme="purple"] [class*="filterTabActive"] {
+  background: rgba(124, 92, 252, 0.1) !important;
+  color: #7c5cfc !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="filterTabActive"] {
+  background: rgba(167, 139, 250, 0.15) !important;
+  color: #a78bfa !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   十七、layout.css 暗色模式 — 遗漏的 #ff7f16 硬编码覆盖
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 暗色分页激活态 */
+html[data-theme="purple"].dark-mode .qwenpaw-pagination .qwenpaw-pagination-item-active,
+html[data-theme="purple"].dark-mode .ant-pagination .ant-pagination-item-active {
+  background: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色排序图标激活态 */
+html[data-theme="purple"].dark-mode .qwenpaw-table-column-sorter-up.active,
+html[data-theme="purple"].dark-mode .qwenpaw-table-column-sorter-down.active,
+html[data-theme="purple"].dark-mode .ant-table-column-sorter-up.active,
+html[data-theme="purple"].dark-mode .ant-table-column-sorter-down.active {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 Checkbox 选中 */
+html[data-theme="purple"].dark-mode .qwenpaw-checkbox-checked .qwenpaw-checkbox-inner,
+html[data-theme="purple"].dark-mode .ant-checkbox-checked .ant-checkbox-inner {
+  background: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 Select 选中项文字色 */
+html[data-theme="purple"].dark-mode .qwenpaw-select-item-option-selected,
+html[data-theme="purple"].dark-mode .ant-select-item-option-selected {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 TimePicker 选中 */
+html[data-theme="purple"].dark-mode .qwenpaw-picker-time-panel-cell-selected .qwenpaw-picker-time-panel-cell-inner,
+html[data-theme="purple"].dark-mode .ant-picker-time-panel-cell-selected .ant-picker-time-panel-cell-inner {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 DatePicker 今日标记 */
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-today .qwenpaw-picker-cell-inner::before,
+html[data-theme="purple"].dark-mode .ant-picker-cell-today .ant-picker-cell-inner::before {
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 DatePicker 选中/范围起止 */
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-selected .qwenpaw-picker-cell-inner,
+html[data-theme="purple"].dark-mode .ant-picker-cell-selected .ant-picker-cell-inner,
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-range-start .qwenpaw-picker-cell-inner,
+html[data-theme="purple"].dark-mode .ant-picker-cell-range-start .ant-picker-cell-inner,
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-range-end .qwenpaw-picker-cell-inner,
+html[data-theme="purple"].dark-mode .ant-picker-cell-range-end .ant-picker-cell-inner {
+  background: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 DatePicker 范围 hover */
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-in-view.qwenpaw-picker-cell-range-hover::before,
+html[data-theme="purple"].dark-mode .ant-picker-cell-in-view.ant-picker-cell-range-hover::before,
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-in-view.qwenpaw-picker-cell-range-hover-start::after,
+html[data-theme="purple"].dark-mode .ant-picker-cell-in-view.ant-picker-cell-range-hover-start::after,
+html[data-theme="purple"].dark-mode .qwenpaw-picker-cell-in-view.qwenpaw-picker-cell-range-hover-end::after,
+html[data-theme="purple"].dark-mode .ant-picker-cell-in-view.ant-picker-cell-range-hover-end::after {
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 DatePicker 今天按钮 */
+html[data-theme="purple"].dark-mode .qwenpaw-picker-today-btn,
+html[data-theme="purple"].dark-mode .ant-picker-today-btn {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 Slider 轨道 */
+html[data-theme="purple"].dark-mode .qwenpaw-slider-track,
+html[data-theme="purple"].dark-mode .ant-slider-track {
+  background-color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 Slider 标记文字 */
+html[data-theme="purple"].dark-mode .qwenpaw-slider-mark-text,
+html[data-theme="purple"].dark-mode .ant-slider-mark-text {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 Slider 把手 */
+html[data-theme="purple"].dark-mode .qwenpaw-slider-handle::after,
+html[data-theme="purple"].dark-mode .ant-slider-handle::after {
+  box-shadow: 0 0 0 2px var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色聊天消息链接 */
+html[data-theme="purple"].dark-mode [class*="chat-anywhere"] [class*="message"] a {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   十八、layout.css 亮色模式 — #f9f8f4 暖灰背景 → 淡紫灰
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* layout.css 中的 body / .ant-layout 背景 */
+html[data-theme="purple"] body {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+html[data-theme="purple"] .ant-layout,
+html[data-theme="purple"] .qwenpaw-layout {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+html[data-theme="purple"] .ant-layout-content,
+html[data-theme="purple"] .qwenpaw-layout-content {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* layout.css 中的菜单背景 */
+html[data-theme="purple"] .qwenpaw-menu,
+html[data-theme="purple"] .ant-menu {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* layout.css 中的菜单选中项（亮色） */
+html[data-theme="purple"] .qwenpaw-menu-item-selected,
+html[data-theme="purple"] .ant-menu-item-selected {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* layout.css 中的气泡列表 / 输入区 / 欢迎页背景 */
+html[data-theme="purple"] .qwenpaw-bubble-list-wrapper {
+  background: #fdfcff !important;
+}
+
+html[data-theme="purple"] .qwenpaw-chat-anywhere-input {
+  background: #faf9fe !important;
+}
+
+html[data-theme="purple"] .qwenpaw-chat-anywhere-message-list-welcome {
+  background: #faf9fe !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   十九、layouts/index.module.less — 硬编码橙色覆盖（CSS Modules 类名匹配）
+   注：header/sider 背景已由第二节（.qwenpaw-layout-header/.qwenpaw-layout-sider）
+   和第十八章（body/.ant-layout）覆盖，此处不再重复，避免宽泛选择器误伤其他页面。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* collapseToggleContainer 背景 #f9f8f4 — 精确匹配，不会误伤 */
+html[data-theme="purple"] [class*="collapseToggleContainer"] {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* collapseToggle hover — color: #ff7f16 */
+html[data-theme="purple"] [class*="collapseToggle"]:hover {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* modeToggleActive — color: #ff7f16, bg: rgba(255,127,22,0.08) */
+html[data-theme="purple"] [class*="modeToggleActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* simpleNewChat — bg: rgba(255,127,22,0.08), color: #ff7f16 */
+html[data-theme="purple"] [class*="simpleNewChat"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="simpleNewChat"]:hover {
+  background: rgba(124, 92, 252, 0.14) !important;
+}
+
+/* simpleNavItemActive — bg: rgba(43,18,0,0.08) */
+html[data-theme="purple"] [class*="simpleNavItemActive"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* simpleSessionItemActive — bg: rgba(43,18,0,0.08) */
+html[data-theme="purple"] [class*="simpleSessionItemActive"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* simpleSessionActionBtnActive — color: #ff7f16 */
+html[data-theme="purple"] [class*="simpleSessionActionBtnActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* collapsedNavItemActive — bg: rgba(43,18,0,0.08) */
+html[data-theme="purple"] [class*="collapsedNavItemActive"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+}
+
+/* updateModalVersionTag — border: rgba(43,18,0,0.12) */
+html[data-theme="purple"] [class*="updateModalVersionTag"] {
+  border-color: rgba(124, 92, 252, 0.12) !important;
+}
+
+/* updateViewReleasesBtn hover — bg: #d45b0a */
+html[data-theme="purple"] [class*="updateViewReleasesBtn"]:hover {
+  background: var(--color-primary-hover, #6b4fe8) !important;
+  border-color: var(--color-primary-hover, #6b4fe8) !important;
+}
+
+/* ─── 暗色模式：layouts/index.module.less 中的暗色覆盖 ─────────────────── */
+
+/* 暗色 collapseToggleContainer — 精确匹配 */
+html[data-theme="purple"].dark-mode [class*="collapseToggleContainer"] {
+  background: var(--color-bg-base, #141418) !important;
+}
+
+/* 暗色 menu-item-selected — bg: rgba(255,127,22,0.5) */
+html[data-theme="purple"].dark-mode [class*="siderDark"] [class*="qwenpaw-menu-item-selected"],
+html[data-theme="purple"].dark-mode [class*="sider"] [class*="qwenpaw-menu-item-selected"] {
+  background: rgba(167, 139, 250, 0.15) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 modeToggleActive */
+html[data-theme="purple"].dark-mode [class*="modeToggleActive"] {
+  color: var(--color-primary, #a78bfa) !important;
+  background: rgba(167, 139, 250, 0.15) !important;
+}
+
+/* 暗色 simpleNewChat */
+html[data-theme="purple"].dark-mode [class*="simpleNewChat"] {
+  background: rgba(167, 139, 250, 0.15) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="simpleNewChat"]:hover {
+  background: rgba(167, 139, 250, 0.2) !important;
+}
+
+/* 暗色 simpleNavItemActive */
+html[data-theme="purple"].dark-mode [class*="simpleNavItemActive"] {
+  background: rgba(167, 139, 250, 0.15) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* 暗色 simpleSessionItemActive */
+html[data-theme="purple"].dark-mode [class*="simpleSessionItemActive"] {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* 暗色 collapsedNavItemActive — bg: rgba(255,127,22,0.5) */
+html[data-theme="purple"].dark-mode [class*="collapsedNavItemActive"] {
+  background: rgba(167, 139, 250, 0.15) !important;
+}
+
+/* 暗色 collapseToggle hover */
+html[data-theme="purple"].dark-mode [class*="collapseToggle"]:hover {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二十、全局 Tabs 覆盖 — .module.less 中 :global(.qwenpaw-tabs-tab-active) 等
+   多个页面（Security、Config、Environments）中通过 :global 使用 #ff7f16
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Tabs tab hover */
+html[data-theme="purple"] .qwenpaw-tabs-tab:hover .qwenpaw-tabs-tab-btn,
+html[data-theme="purple"] .ant-tabs-tab:hover .ant-tabs-tab-btn {
+  color: var(--color-primary-hover, #6b4fe8) !important;
+}
+
+/* Tabs tab active 文字色 — 覆盖 .module.less 中的 !important */
+html[data-theme="purple"] .qwenpaw-tabs-tab-active .qwenpaw-tabs-tab-btn,
+html[data-theme="purple"] .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* Tabs ink-bar — 覆盖 .module.less 中的 !important */
+html[data-theme="purple"] .qwenpaw-tabs-ink-bar,
+html[data-theme="purple"] .ant-tabs-ink-bar {
+  background: var(--color-primary, #7c5cfc) !important;
+}
+
+/* 暗色 Tabs */
+html[data-theme="purple"].dark-mode .qwenpaw-tabs-tab-active .qwenpaw-tabs-tab-btn,
+html[data-theme="purple"].dark-mode .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-tabs-ink-bar,
+html[data-theme="purple"].dark-mode .ant-tabs-ink-bar {
+  background: var(--color-primary, #a78bfa) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二十一、各页面 .module.less 中的橙色 → 紫色覆盖
+   使用 [class*="className"] 属性选择器匹配 CSS Modules 编译后的类名
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── 21.1 Environments 页面 ───────────────────────────────────────────── */
+
+/* inputGroup focus 边框 */
+html[data-theme="purple"] [class*="inputGroup"]:focus-within {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  box-shadow: 0 0 0 2px rgba(124, 92, 252, 0.12) !important;
+}
+
+/* inputLabel focus 态 */
+html[data-theme="purple"] [class*="inputGroup"]:focus-within [class*="inputLabel"] {
+  color: var(--color-primary, #7c5cfc) !important;
+  background: rgba(124, 92, 252, 0.06) !important;
+}
+
+/* rowIconBtn hover */
+html[data-theme="purple"] [class*="rowIconBtn"]:hover {
+  color: var(--color-primary, #7c5cfc) !important;
+  background: rgba(124, 92, 252, 0.06) !important;
+}
+
+/* addBtn hover */
+html[data-theme="purple"] [class*="addBtn"]:hover {
+  color: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+  background: rgba(124, 92, 252, 0.06) !important;
+  box-shadow: 0 2px 8px rgba(124, 92, 252, 0.12) !important;
+}
+
+/* passwordToggle hover */
+html[data-theme="purple"] [class*="passwordToggle"]:hover {
+  color: var(--color-primary, #7c5cfc) !important;
+  background: rgba(124, 92, 252, 0.08) !important;
+}
+
+/* envCard 选中态边框（通用） */
+html[data-theme="purple"] [class*="envCardActive"],
+html[data-theme="purple"] [class*="envCardSelected"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* 暗色 Environments */
+html[data-theme="purple"].dark-mode [class*="inputGroup"]:focus-within {
+  border-color: var(--color-primary, #a78bfa) !important;
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.15) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="inputGroup"]:focus-within [class*="inputLabel"] {
+  color: var(--color-primary, #a78bfa) !important;
+  background: rgba(167, 139, 250, 0.1) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="rowIconBtn"]:hover {
+  color: var(--color-primary, #a78bfa) !important;
+  background: rgba(167, 139, 250, 0.12) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="addBtn"]:hover {
+  color: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+  background: rgba(167, 139, 250, 0.1) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="passwordToggle"]:hover {
+  color: var(--color-primary, #a78bfa) !important;
+  background: rgba(167, 139, 250, 0.12) !important;
+}
+
+/* ─── 21.2 Security 页面 ──────────────────────────────────────────────── */
+
+/* Security 页面 #f9f8f4 表头背景 */
+html[data-theme="purple"] [class*="securityContainer"] [class*="qwenpaw-table-thead"] th,
+html[data-theme="purple"] [class*="sectionFileGuardContainer"] [class*="qwenpaw-table-thead"] th,
+html[data-theme="purple"] [class*="sectionSkillScannerContainer"] [class*="qwenpaw-table-thead"] th {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* 暗色 Security 表头 */
+html[data-theme="purple"].dark-mode [class*="securityContainer"] [class*="qwenpaw-table-thead"] th,
+html[data-theme="purple"].dark-mode [class*="sectionFileGuardContainer"] [class*="qwenpaw-table-thead"] th,
+html[data-theme="purple"].dark-mode [class*="sectionSkillScannerContainer"] [class*="qwenpaw-table-thead"] th {
+  background: var(--color-bg-elevated, #1e1e24) !important;
+}
+
+/* ─── 21.3 Agent/Config 页面 — Slider #ff7f16 ─────────────────────────── */
+
+/* Config 页面 :global 中的 Slider 轨道 */
+html[data-theme="purple"] [class*="configPage"] .qwenpaw-slider-track,
+html[data-theme="purple"] [class*="configPage"] .ant-slider-track {
+  background-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="configPage"] .qwenpaw-slider .qwenpaw-slider-handle::after,
+html[data-theme="purple"] [class*="configPage"] .ant-slider .ant-slider-handle::after {
+  box-shadow: 0 0 0 2px var(--color-primary, #7c5cfc) !important;
+}
+
+/* Config 页面 toggle 相关 */
+html[data-theme="purple"] [class*="configPage"] [class*="toggleActive"],
+html[data-theme="purple"] [class*="configPage"] [class*="toggleChecked"] {
+  background: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* 暗色 Config */
+html[data-theme="purple"].dark-mode [class*="configPage"] .qwenpaw-slider-track,
+html[data-theme="purple"].dark-mode [class*="configPage"] .ant-slider-track {
+  background-color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="configPage"] .qwenpaw-slider .qwenpaw-slider-handle::after,
+html[data-theme="purple"].dark-mode [class*="configPage"] .ant-slider .ant-slider-handle::after {
+  box-shadow: 0 0 0 2px var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 21.4 Agent/Workspace 页面 — border/color #ff7f16 ────────────────── */
+
+html[data-theme="purple"] [class*="workspaceCardActive"],
+html[data-theme="purple"] [class*="workspaceCardSelected"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="workspaceCardActive"] [class*="cardTitle"],
+html[data-theme="purple"] [class*="workspaceCardSelected"] [class*="cardTitle"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="workspaceCardActive"],
+html[data-theme="purple"].dark-mode [class*="workspaceCardSelected"] {
+  border-color: var(--color-primary, #a78bfa) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="workspaceCardActive"] [class*="cardTitle"],
+html[data-theme="purple"].dark-mode [class*="workspaceCardSelected"] [class*="cardTitle"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ─── 21.5 Agent/Skills 页面 — border/bg #ff7f16 + rgba(255,127,22,...) ── */
+
+html[data-theme="purple"] [class*="skillCardSelected"],
+html[data-theme="purple"] [class*="skillCardActive"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  box-shadow: 0 0 0 1px rgba(124, 92, 252, 0.2) !important;
+}
+
+html[data-theme="purple"] [class*="skillBadge"],
+html[data-theme="purple"] [class*="skillTagActive"] {
+  background: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="skillCardSelected"],
+html[data-theme="purple"].dark-mode [class*="skillCardActive"] {
+  border-color: var(--color-primary, #a78bfa) !important;
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.3) !important;
+}
+
+/* ─── 21.6 Agent/Tools 页面 — #ff7f16 + #ff9d4d ───────────────────────── */
+
+html[data-theme="purple"] [class*="toolCardSelected"],
+html[data-theme="purple"] [class*="toolCardActive"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  background-color: rgba(124, 92, 252, 0.06) !important;
+}
+
+html[data-theme="purple"] [class*="toolIconActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="toolCardSelected"],
+html[data-theme="purple"].dark-mode [class*="toolCardActive"] {
+  border-color: var(--color-primary, #a78bfa) !important;
+  background-color: rgba(167, 139, 250, 0.1) !important;
+}
+
+/* ─── 21.7 Settings/Models 页面 — #ff7f16 + #ff9d4d + rgba(255,127,22,...) ─ */
+
+html[data-theme="purple"] [class*="modelCardSelected"],
+html[data-theme="purple"] [class*="modelCardActive"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  background: rgba(124, 92, 252, 0.06) !important;
+}
+
+html[data-theme="purple"] [class*="providerCardSelected"],
+html[data-theme="purple"] [class*="providerCardActive"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="modelTagActive"],
+html[data-theme="purple"] [class*="providerTagActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+  background: rgba(124, 92, 252, 0.08) !important;
+}
+
+/* Models 页面渐变背景中的 rgba(255,127,22,...) */
+html[data-theme="purple"] [class*="modelInfoCard"]:not([class*="modelInfoCardDisabled"]) {
+  background: linear-gradient(135deg, rgba(124, 92, 252, 0.1) 0%, rgba(124, 92, 252, 0.04) 100%) !important;
+  border-left-color: rgba(124, 92, 252, 0.55) !important;
+}
+
+/* Models 页面选中项高亮背景 */
+html[data-theme="purple"] [class*="modelRowSelected"],
+html[data-theme="purple"] [class*="providerRowSelected"] {
+  background: rgba(124, 92, 252, 0.06) !important;
+  border-left: 3px solid rgba(124, 92, 252, 0.35) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="modelCardSelected"],
+html[data-theme="purple"].dark-mode [class*="modelCardActive"] {
+  border-color: var(--color-primary, #a78bfa) !important;
+  background: rgba(167, 139, 250, 0.1) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="modelTagActive"],
+html[data-theme="purple"].dark-mode [class*="providerTagActive"] {
+  color: var(--color-primary, #a78bfa) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+  background: rgba(167, 139, 250, 0.12) !important;
+}
+
+/* ─── 21.8 Settings/SkillPool 页面 — border #ff7f16 ───────────────────── */
+
+html[data-theme="purple"] [class*="skillPoolCardSelected"],
+html[data-theme="purple"] [class*="skillPoolCardActive"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  box-shadow: 0 0 0 1px rgba(124, 92, 252, 0.2) !important;
+}
+
+html[data-theme="purple"] [class*="skillPoolBadge"] {
+  background: rgba(124, 92, 252, 0.05) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="skillPoolCardSelected"],
+html[data-theme="purple"].dark-mode [class*="skillPoolCardActive"] {
+  border-color: var(--color-primary, #a78bfa) !important;
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.3) !important;
+}
+
+/* ─── 21.9 Settings/Agents 页面 — #f9f8f4 + #ff7f16 ──────────────────── */
+
+html[data-theme="purple"] [class*="agentsContainer"] [class*="qwenpaw-table-thead"] th,
+html[data-theme="purple"] [class*="agentsPage"] [class*="qwenpaw-table-thead"] th {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+html[data-theme="purple"] [class*="agentCardSelected"],
+html[data-theme="purple"] [class*="agentCardActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="agentsContainer"] [class*="qwenpaw-table-thead"] th,
+html[data-theme="purple"].dark-mode [class*="agentsPage"] [class*="qwenpaw-table-thead"] th {
+  background: var(--color-bg-elevated, #1e1e24) !important;
+}
+
+/* ─── 21.10 Control/Channels 页面 — #ff7f16 + #f07e26 ─────────────────── */
+
+html[data-theme="purple"] [class*="channelCardSelected"],
+html[data-theme="purple"] [class*="channelCardActive"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  outline-color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="channelStatusActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="channelTagDefault"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 21.11 Inbox 页面 — #ff7f16 + rgba(255,127,22,...) ───────────────── */
+
+html[data-theme="purple"] [class*="pushMessageCard"] [class*="cardBadge"],
+html[data-theme="purple"] [class*="pushMessageBadge"] {
+  background: var(--color-primary, #7c5cfc) !important;
+  border-color: rgba(124, 92, 252, 0.45) !important;
+}
+
+html[data-theme="purple"] [class*="harvestCardSelected"],
+html[data-theme="purple"] [class*="magazineStackSelected"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="createHarvestModal"] [class*="createBtn"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+  box-shadow: 0 0 0 2px rgba(124, 92, 252, 0.12) !important;
+}
+
+/* ─── 21.12 Settings/Market 页面 — rgba(255,127,22,0.1) ───────────────── */
+
+html[data-theme="purple"] [class*="queueItemActive"],
+html[data-theme="purple"] [class*="queueItemSelected"] {
+  background: rgba(124, 92, 252, 0.08) !important;
+}
+
+/* ─── 21.13 Settings/VoiceTranscription 页面 — border #ff7f16 ─────────── */
+
+html[data-theme="purple"] [class*="voiceTranscriptionCard"],
+html[data-theme="purple"] [class*="voiceTranscriptionActive"] {
+  border-color: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ─── 21.14 ThemeToggleButton — color #ff7f16 + bg rgba(43,18,0,...) ──── */
+
+html[data-theme="purple"] [class*="themeToggleActive"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="themeToggleBtn"]:hover {
+  background: rgba(124, 92, 252, 0.06) !important;
+}
+
+html[data-theme="purple"] [class*="themeToggleBtn"][class*="active"] {
+  background: rgba(124, 92, 252, 0.03) !important;
+}
+
+/* ─── 21.15 LanguageSwitcher — bg rgba(43,18,0,...) ───────────────────── */
+
+html[data-theme="purple"] [class*="languageSwitcherBtn"]:hover {
+  background: rgba(124, 92, 252, 0.06) !important;
+}
+
+html[data-theme="purple"] [class*="languageSwitcherBtn"][class*="active"] {
+  background: rgba(124, 92, 252, 0.03) !important;
+}
+
+/* ─── 21.16 CodingModeToggle — #faad14 (warning 色，保持不变) ──────────── */
+/* #faad14 是 antd 的标准 warning 色，不属于品牌橙色系，不需要覆盖 */
+
+/* ─── 21.17 Control/Sessions, CronJobs, Heartbeat — #f9f8f4 ───────────── */
+
+html[data-theme="purple"] [class*="sessionsContainer"],
+html[data-theme="purple"] [class*="cronJobsContainer"],
+html[data-theme="purple"] [class*="heartbeatContainer"] {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* ─── 21.18 通用选中态覆盖 — 已移除 ──────────────────────────────────── */
+/* 前面 21.1~21.17 已为各页面添加了精确的 class 选择器覆盖，
+   无需使用宽泛的 [class*="selected"][class*="Card"] 通配选择器，
+   避免误伤其他组件。 */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二十二、AgentSelector — #f07e26 / #f5a05a 橙色覆盖（补充）
+   overrides.css 第十二章已覆盖大部分，这里补充遗漏的
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* AgentSelector 中 rgba(43,18,0,...) 背景 → 紫色 */
+html[data-theme="purple"] [class*="agentSelectorWrapper"] [class*="agentOption"]:hover,
+html[data-theme="purple"] [class*="agentSelectorDropdown"] [class*="agentOption"]:hover {
+  background: rgba(124, 92, 252, 0.04) !important;
+}
+
+html[data-theme="purple"] [class*="agentSelectorWrapper"] [class*="agentOption"][class*="selected"],
+html[data-theme="purple"] [class*="agentSelectorWrapper"] [class*="agentOption"][class*="active"] {
+  background: rgba(124, 92, 252, 0.06) !important;
+}
+
+/* AgentSelector 中 managementLink hover 等 #f07e26 已在第十二章覆盖 */
+
+/* 暗色 AgentSelector rgba(43,18,0,...) */
+html[data-theme="purple"].dark-mode [class*="agentSelectorWrapper"] [class*="agentOption"]:hover,
+html[data-theme="purple"].dark-mode [class*="agentSelectorDropdown"] [class*="agentOption"]:hover {
+  background: rgba(167, 139, 250, 0.08) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="agentSelectorWrapper"] [class*="agentOption"][class*="selected"],
+html[data-theme="purple"].dark-mode [class*="agentSelectorWrapper"] [class*="agentOption"][class*="active"] {
+  background: rgba(167, 139, 250, 0.1) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二十三、TSX 内联样式覆盖 — Badge color / Progress strokeColor 等
+   这些通过内联 style 设置的颜色无法通过 CSS 直接覆盖，
+   但部分 antd 组件的 color prop 会生成 CSS 自定义属性或 class
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Badge dot 使用 color prop 时的背景色 — antd 5 会设置 --badge-color */
+html[data-theme="purple"] .ant-badge-dot[style*="255, 127, 22"],
+html[data-theme="purple"] .ant-badge-dot[style*="ff7f16"],
+html[data-theme="purple"] .ant-badge-dot[style*="FF7F16"] {
+  background: var(--color-primary, #7c5cfc) !important;
+}
+
+/* Badge status processing 圆点 */
+html[data-theme="purple"] .ant-badge-status-dot[style*="255, 157, 77"],
+html[data-theme="purple"] .qwenpaw-badge-status-dot[style*="255, 157, 77"] {
+  background: var(--color-primary, #7c5cfc) !important;
+}
+
+/* Progress strokeColor 内联 — antd 渲染为 .ant-progress-bg 的 background */
+/* 无法直接覆盖内联 style，但可以覆盖使用了 strokeColor="#ff7f16" 的 SVG path */
+html[data-theme="purple"] .ant-progress-circle .ant-progress-circle-trail[stroke*="ff7f16"],
+html[data-theme="purple"] .ant-progress-circle .ant-progress-circle-trail[stroke*="FF7F16"] {
+  stroke: var(--color-primary, #7c5cfc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二十四、sidebarSettingsPanel — #ff9d4d / #fff7e6 回退色覆盖
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* sidebarSettingsPanel 中 var(--colorPrimary, #ff9d4d) 回退 */
+/* 当紫色主题开启时，antd 的 --colorPrimary 会被 ConfigProvider 设置为紫色 */
+/* 但 .module.less 中的 var(--colorPrimary, #ff9d4d) 如果 antd cssVar 前缀不匹配则不生效 */
+/* 所以需要在 CSS 中直接覆盖 */
+
+html[data-theme="purple"] [class*="sidebarSettingsPanel"] [class*="active"],
+html[data-theme="purple"] [class*="sidebarSettingsPanel"] [class*="selected"] {
+  background: var(--color-primary-bg, rgba(124, 92, 252, 0.08)) !important;
+  border-color: var(--color-primary, #7c5cfc) !important;
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="sidebarSettingsPanel"] [class*="active"],
+html[data-theme="purple"].dark-mode [class*="sidebarSettingsPanel"] [class*="selected"] {
+  background: rgba(167, 139, 250, 0.12) !important;
+  border-color: var(--color-primary, #a78bfa) !important;
+  color: var(--color-primary, #a78bfa) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二十五、sidebarSessionList — #f9f8f4 + #ff7f16
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="purple"] [class*="sidebarSessionList"] {
+  background: var(--color-bg-base, #f8f7fc) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二十六、全局美化增强 — 紫色主题开启时的额外美化
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 紫色主题下卡片边框微调 */
+html[data-theme="purple"] .qwenpaw-card,
+html[data-theme="purple"] .ant-card {
+  border-color: rgba(124, 92, 252, 0.08);
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-card,
+html[data-theme="purple"].dark-mode .ant-card {
+  border-color: rgba(167, 139, 250, 0.1);
+}
+
+/* 紫色主题下 Modal/Drawer 圆角增强 */
+html[data-theme="purple"] .qwenpaw-modal-content,
+html[data-theme="purple"] .ant-modal-content {
+  box-shadow: 0 8px 32px rgba(124, 92, 252, 0.12);
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-modal-content,
+html[data-theme="purple"].dark-mode .ant-modal-content {
+  box-shadow: 0 8px 32px rgba(167, 139, 250, 0.15);
+}
+
+/* 紫色主题下 Dropdown 菜单阴影 */
+html[data-theme="purple"] .qwenpaw-dropdown-menu,
+html[data-theme="purple"] .ant-dropdown-menu {
+  box-shadow: 0 6px 20px rgba(124, 92, 252, 0.1);
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-dropdown-menu,
+html[data-theme="purple"].dark-mode .ant-dropdown-menu {
+  box-shadow: 0 6px 20px rgba(167, 139, 250, 0.12);
+}
+
+/* 紫色主题下输入框 focus 时的过渡动画 */
+html[data-theme="purple"] .qwenpaw-input,
+html[data-theme="purple"] .ant-input,
+html[data-theme="purple"] .qwenpaw-select-selector,
+html[data-theme="purple"] .ant-select-selector {
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+
+/* 紫色主题下 Popover/Tooltip 箭头微调 */
+html[data-theme="purple"] .qwenpaw-popover-arrow::before,
+html[data-theme="purple"] .ant-popover-arrow::before {
+  box-shadow: 0 2px 8px rgba(124, 92, 252, 0.06);
+}
+
+/* 紫色主题下 Divider 颜色微调 */
+html[data-theme="purple"] .qwenpaw-divider,
+html[data-theme="purple"] .ant-divider {
+  border-color: rgba(124, 92, 252, 0.1);
+}
+
+html[data-theme="purple"].dark-mode .qwenpaw-divider,
+html[data-theme="purple"].dark-mode .ant-divider {
+  border-color: rgba(167, 139, 250, 0.12);
+}

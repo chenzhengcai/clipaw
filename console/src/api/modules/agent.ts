@@ -124,6 +124,22 @@ export const agentApi = {
       whisper_installed: boolean;
     }>("/workspace/local-whisper-status"),
 
+  setActiveAgent: (agentId: string) =>
+    request<{ active_agent: string }>("/agents/active", {
+      method: "PUT",
+      body: JSON.stringify({ agent_id: agentId }),
+    }),
+
+  /** Test Volcengine BigModel ASR connectivity. */
+  testVoiceConnection: (credentials?: {
+    api_key?: string;
+    resource_id?: string;
+  }) =>
+    request<{ ok: boolean; error?: string }>("/workspace/voice-test-connection", {
+      method: "POST",
+      body: credentials ? JSON.stringify(credentials) : undefined,
+    }),
+
   transcribeAudio: async (file: File | Blob): Promise<{ text: string }> => {
     const formData = new FormData();
     formData.append("file", file);

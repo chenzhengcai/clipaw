@@ -24,6 +24,10 @@ import { useOsNotify } from "./osNotifyStore";
 import { resolveAppDef } from "./osAppRegistry";
 import { useOsStyles } from "./useOsStyles";
 import { getConsoleRootHref } from "../utils/navigationMode";
+import {
+  withCacheBuster,
+  withDesktopMarker,
+} from "../tauri/backendRuntime";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 
 function useClock() {
@@ -96,7 +100,11 @@ export default function MenuBar({ hidden = false }: { hidden?: boolean }) {
                 label: t("os.returnToConsole", "Return to console"),
                 onClick: () =>
                   window.location.assign(
-                    getConsoleRootHref(window.location.pathname),
+                    withCacheBuster(
+                      withDesktopMarker(
+                        getConsoleRootHref(window.location.pathname),
+                      ),
+                    ),
                   ),
               },
             ],

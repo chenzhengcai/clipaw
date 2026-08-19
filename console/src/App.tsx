@@ -46,6 +46,8 @@ import { languageApi } from "./api/modules/language";
 import { useUploadLimitStore } from "./stores/uploadLimitStore";
 import { getApiUrl, getApiToken, clearAuthToken } from "./api/config";
 import CloseWindowPrompt from "./tauri/CloseWindowPrompt";
+import { availableThemes } from "./themes";
+import { useThemeStore, resolveActiveTheme } from "./stores/themeStore";
 import { isTauri } from "@tauri-apps/api/core";
 import { isDesktopTauriRuntime } from "./utils/openExternalLink";
 import { interceptBlankLinkClicks } from "./utils/interceptBlankLinkClicks";
@@ -151,6 +153,18 @@ function AppInner() {
     antdLocaleMap[lang] ?? enUS,
   );
 
+  // ── Custom theme system ──────────────────────────────────────────────
+  const activeThemeId = useThemeStore((s) => s.activeThemeId);
+  const currentTheme = resolveActiveTheme(availableThemes, activeThemeId);
+
+  useEffect(() => {
+    if (currentTheme) {
+      document.documentElement.setAttribute("data-theme", currentTheme.id);
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+  }, [currentTheme]);
+
   useEffect(() => {
     if (!localStorage.getItem("language")) {
       languageApi
@@ -166,6 +180,8 @@ function AppInner() {
         );
     }
     useUploadLimitStore.getState().fetch();
+    // Restore client config (agent selection, voice settings, etc.)
+    import("./api/clientConfig").then((m) => m.loadClientConfig()).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -256,7 +272,24 @@ function AppInner() {
             : antdTheme.defaultAlgorithm,
           token: {
             colorPrimary: "#FF7F16",
+            ...(isDark ? currentTheme?.darkTokens : currentTheme?.lightTokens),
           },
+          ...((selectedTheme as any)?.theme?.components
+            ? {
+                components: {
+                  ...(selectedTheme as any).theme.components,
+                  ...(isDark
+                    ? currentTheme?.darkComponents
+                    : currentTheme?.lightComponents),
+                },
+              }
+            : currentTheme
+              ? {
+                  components: isDark
+                    ? currentTheme?.darkComponents
+                    : currentTheme?.lightComponents,
+                }
+              : {}),
         }}
       >
         <AntdApp>
