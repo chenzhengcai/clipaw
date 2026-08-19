@@ -460,6 +460,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "clipaw-desktop"
+version = "0.1.0"
+dependencies = [
+ "accessibility",
+ "accessibility-sys",
+ "base64 0.22.1",
+ "block2",
+ "core-foundation",
+ "core-graphics 0.24.0",
+ "dirs 5.0.1",
+ "dispatch2",
+ "futures-util",
+ "jpeg-encoder",
+ "libc",
+ "log",
+ "minisign-verify",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-screen-capture-kit",
+ "rand 0.9.5",
+ "reqwest 0.12.28",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-log",
+ "tauri-plugin-shell",
+ "tauri-plugin-updater",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "webview2-com",
+ "windows",
+]
+
+[[package]]
 name = "cocoa"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2798,47 +2839,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "clipaw-desktop"
-version = "0.1.0"
-dependencies = [
- "accessibility",
- "accessibility-sys",
- "base64 0.22.1",
- "block2",
- "core-foundation",
- "core-graphics 0.24.0",
- "dirs 5.0.1",
- "dispatch2",
- "futures-util",
- "jpeg-encoder",
- "libc",
- "log",
- "minisign-verify",
- "objc2",
- "objc2-app-kit",
- "objc2-core-graphics",
- "objc2-foundation",
- "objc2-screen-capture-kit",
- "rand 0.9.5",
- "reqwest 0.12.28",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-log",
- "tauri-plugin-shell",
- "tauri-plugin-updater",
- "tempfile",
- "tokio",
- "uuid",
- "webview2-com",
- "windows",
 ]
 
 [[package]]

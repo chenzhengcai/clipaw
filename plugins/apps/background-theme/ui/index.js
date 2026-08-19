@@ -217,6 +217,12 @@ body.qwp-bg-global-on [class*='index-module__sider__'] { background: transparent
 body.qwp-bg-global-on .page-container { background: transparent !important; }
 body.qwp-bg-global-on .page-content { background: transparent !important; border-color: transparent !important; }
 body.qwp-bg-global-on #root { background: transparent !important; }
+/* Chat input wrapper: solid surface removed while the plugin is on so
+   the chat/global background shows through behind the input area. */
+body.qwp-bg-enabled .qwenpaw-chat-anywhere-input-wrapper,
+body.qwp-bg-enabled [class*="chat-anywhere-input-wrapper"] {
+  background: transparent !important;
+}
 /* Chat surfaces: clear their opaque backgrounds so the global background
    image shows through the conversation window. Covers the layout container,
    bubble list wrapper, input bar, and welcome card. Use html+body.qwp-bg-global-on
@@ -464,8 +470,12 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
 
   function applyConfig(cfg) {
     if (!cfg || !cfg.slots) return;
+    // Master switch marks the body so plugin-scoped CSS (transparent
+    // surfaces, chat input wrapper, …) applies exactly while enabled.
+    const enabled = cfg.enabled === true;
+    document.body.classList.toggle("qwp-bg-enabled", enabled);
     // Master switch OFF -> strip every layer / class (original UI restored).
-    if (cfg.enabled !== true) {
+    if (!enabled) {
       applyGlobal(null);
       applyChat(null);
       return;
