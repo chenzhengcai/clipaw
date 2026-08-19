@@ -194,11 +194,11 @@ export const BUILTIN_MENU: MenuItem[] = [
   {
     id: "core.checkpoints",
     location: "primary.agentScoped",
-    parentId: "core.agent-group",
+    parentId: "core.workspace-group",
     label: navLabel("checkpoints.nav"),
     icon: GitBranch,
     route: "core.checkpoints",
-    order: 80,
+    order: 75,
   },
 
   // ── Settings (Sidebar Menu #2) ───────────────────────────────────────────

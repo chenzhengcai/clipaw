@@ -245,21 +245,37 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   );
 
   // ── Collapsible section state ──────────────────────────────────────────
-  // Default: all sections collapsed
-  const [collapsedSections, setCollapsedSections] = useState<
-    Record<string, boolean>
-  >({
+  // Default: all sections collapsed; persisted to localStorage so the user's
+  // fold state survives page refreshes.
+  const COLLAPSED_SECTIONS_KEY = "qwenpaw.sidebar.collapsedSections";
+  const DEFAULT_COLLAPSED_SECTIONS: Record<string, boolean> = {
     "core.control-group": true,
-    "core.agent-group": true,
+    "core.workspace-group": true,
     "core.settings-group": true,
     "plugins-group": true,
+  };
+
+  const [collapsedSections, setCollapsedSections] = useState<
+    Record<string, boolean>
+  >(() => {
+    try {
+      const saved = window.localStorage.getItem(COLLAPSED_SECTIONS_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch { /* ignore */ }
+    return DEFAULT_COLLAPSED_SECTIONS;
   });
 
   const toggleSection = useCallback((sectionKey: string) => {
-    setCollapsedSections((prev) => ({
-      ...prev,
-      [sectionKey]: !prev[sectionKey],
-    }));
+    setCollapsedSections((prev) => {
+      const next = { ...prev, [sectionKey]: !prev[sectionKey] };
+      try {
+        window.localStorage.setItem(
+          COLLAPSED_SECTIONS_KEY,
+          JSON.stringify(next),
+        );
+      } catch { /* ignore */ }
+      return next;
+    });
   }, []);
 
   // ── Effects ──────────────────────────────────────────────────────────────
