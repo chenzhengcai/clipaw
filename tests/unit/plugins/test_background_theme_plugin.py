@@ -307,6 +307,46 @@ async def test_put_config_solid_color(api_client, _use_tmp_storage):
         assert full.json()["slots"]["global"]["opacity"] == 0.6
 
 
+async def test_put_config_solid_color_opacity_update_not_cleared(
+    api_client, _use_tmp_storage
+):
+    """Updating opacity on a solid-color slot must not clear the slot.
+
+    Regression: the frontend ``handleOption`` used to omit ``color`` when
+    updating ``opacity`` on a color slot. The backend treats a color slot
+    with no ``color`` field as "clear", which wiped the slot and greyed-out
+    the slider. This test pins the backend contract: as long as ``color`` is
+    present, the slot stays a color slot and opacity is persisted.
+    """
+    async with api_client:
+        # set up a solid-color chat background
+        await api_client.put(
+            "/api/background-theme/config",
+            json={
+                "slot": "chat",
+                "background": {"type": "color", "color": "#F7F3EE"},
+            },
+        )
+
+        # update only opacity, but keep the color (as the fixed frontend does)
+        resp = await api_client.put(
+            "/api/background-theme/config",
+            json={
+                "slot": "chat",
+                "background": {
+                    "type": "color",
+                    "color": "#F7F3EE",
+                    "opacity": 0.5,
+                },
+            },
+        )
+        assert resp.status_code == 200
+        slot = resp.json()["slots"]["chat"]
+        assert slot["type"] == "color"
+        assert slot["color"] == "#F7F3EE"
+        assert slot["opacity"] == 0.5
+
+
 async def test_put_config_opacity_roundtrip(api_client, _use_tmp_storage):
     """Opacity persists for image/video slots and is range-validated."""
     async with api_client:

@@ -1004,6 +1004,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
       const body = {
         type: cur.type,
         file: cur.file,
+        color: cur.color,
         fit: key === "fit" ? value : cur.fit || "cover",
         dim: key === "dim" ? value : cur.dim == null ? 0.35 : cur.dim,
         blur: key === "blur" ? value : cur.blur || 0,
