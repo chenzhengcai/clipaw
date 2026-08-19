@@ -16,6 +16,7 @@ import {
 import { availableThemes } from "@/themes";
 import { useThemeStore } from "@/stores/themeStore";
 import type { PluginInfo } from "@/api/modules/plugin";
+import { BACKGROUND_THEME_PLUGIN_ID } from "./hooks/usePluginColumns";
 import styles from "./index.module.less";
 
 const builtinThemeIds = new Set(availableThemes.map((t) => t.id));
@@ -30,6 +31,22 @@ const themePlugins: PluginInfo[] = availableThemes.map((t) => ({
   loaded: true,
   plugin_type: "frontend" as const,
 }));
+
+// Background-theme is a built-in personalization feature backed by its own
+// plugin backend. Pin it in the installed list so the master-switch row is
+// always visible — even before the plugin is installed into the runtime
+// plugins directory. usePluginColumns renders a Switch for this id.
+const backgroundThemePlugin: PluginInfo = {
+  id: BACKGROUND_THEME_PLUGIN_ID,
+  name: "背景设置",
+  version: "0.1.0",
+  description:
+    "上传图片或视频作为软件全局背景与聊天对话背景，支持历史背景管理、遮罩/模糊等效果调节。",
+  author: "QwenPaw Team",
+  enabled: true,
+  loaded: true,
+  plugin_type: "general" as const,
+};
 
 export default function PluginManagerPage() {
   const { t } = useTranslation();
@@ -77,7 +94,17 @@ export default function PluginManagerPage() {
     onToggleBackgroundTheme,
   });
 
-  const dataSource = [...themePlugins, ...(plugins || [])];
+  // Merge built-in theme rows with backend-loaded plugins. The background-
+  // theme plugin row is always pinned first; if the backend also reports it
+  // (installed into the runtime dir), skip the duplicate from the backend list.
+  const backendPlugins = (plugins || []).filter(
+    (p) => p.id !== BACKGROUND_THEME_PLUGIN_ID,
+  );
+  const dataSource = [
+    backgroundThemePlugin,
+    ...themePlugins,
+    ...backendPlugins,
+  ];
 
   const tabItems = [
     {

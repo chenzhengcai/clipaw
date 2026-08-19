@@ -195,6 +195,14 @@ body.qwp-bg-global-on [class*='index-module__sider__'] { background: transparent
 body.qwp-bg-global-on .page-container { background: transparent !important; }
 body.qwp-bg-global-on .page-content { background: transparent !important; border-color: transparent !important; }
 body.qwp-bg-global-on #root { background: transparent !important; }
+/* Chat surfaces: clear their opaque backgrounds so the global background
+   image shows through the conversation window. Covers the layout container,
+   bubble list wrapper, input bar, and welcome card. Use html+body.qwp-bg-global-on
+   prefix for enough specificity to override dark-mode and purple-theme rules. */
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-layout { background: transparent !important; }
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-bubble-list-wrapper,
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-input,
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-message-list-welcome { background: transparent !important; }
 /* Sidebar section cards: consistent frosted glass so the menus stay
    readable (and pretty) floating over any background. Same tint, blur
    and border for agentScopedSection / settingsSection /
