@@ -2313,7 +2313,11 @@
     "mentionInChat": "在聊天中引用",
     "expandWorkspace": "展开工作区",
     "openWorkspace": "打开工作区",
-    "closeWorkspace": "关闭工作区"
+    "closeWorkspace": "关闭工作区",
+    "artifactCreated": "已新增",
+    "artifactModified": "已修改",
+    "artifactsExpand": "展开其余 {{count}} 个文件",
+    "artifactsCollapse": "收起文件"
   },
   "projectDirectory": {
     "agentTitle": "Agent 项目目录",
