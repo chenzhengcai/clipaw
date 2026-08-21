@@ -17,6 +17,7 @@ import {
 import { languageApi } from "../api/modules/language";
 import { useTheme, type ThemeMode } from "../contexts/ThemeContext";
 import { useSidebarModeStore } from "../stores/sidebarModeStore";
+import { useThemeStore } from "../stores/themeStore";
 import { isTauriRuntime, withCacheBuster, withDesktopMarker } from "../tauri/backendRuntime";
 import {
   clearRememberedCloseAction,
@@ -53,6 +54,7 @@ export default function SidebarSettingsPanel({
   const { themeMode, setThemeMode } = useTheme();
   const { mode: sidebarMode, toggleMode: toggleSidebarMode } =
     useSidebarModeStore();
+  const { activeThemeId, setActiveThemeId } = useThemeStore();
   const [closeBehavior, setCloseBehavior] = React.useState<CloseBehavior>(() =>
     isTauriRuntime() ? getRememberedCloseAction() ?? "ask" : "ask",
   );
@@ -139,6 +141,55 @@ export default function SidebarSettingsPanel({
               <span className={styles.optLabel}>{label}</span>
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* ── Color Scheme ─────────────────────────────────── */}
+      <div className={styles.row}>
+        <span className={styles.label}>
+          {t("sidebar.settings.colorScheme", "Color Scheme")}
+        </span>
+        <div className={styles.options}>
+          <button
+            title={t("sidebar.settings.colorSchemeDefault", "Default")}
+            className={`${styles.optBtn} ${
+              !activeThemeId ? styles.optBtnActive : ""
+            }`}
+            onClick={() => setActiveThemeId(null)}
+          >
+            <span
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: 3,
+                background: "#ff7f16",
+                flexShrink: 0,
+              }}
+            />
+            <span className={styles.optLabel}>
+              {t("sidebar.settings.colorSchemeDefault", "Default")}
+            </span>
+          </button>
+          <button
+            title={t("sidebar.settings.colorSchemePurple", "Purple")}
+            className={`${styles.optBtn} ${
+              activeThemeId === "purple" ? styles.optBtnActive : ""
+            }`}
+            onClick={() => setActiveThemeId("purple")}
+          >
+            <span
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: 3,
+                background: "#7c5cfc",
+                flexShrink: 0,
+              }}
+            />
+            <span className={styles.optLabel}>
+              {t("sidebar.settings.colorSchemePurple", "Purple")}
+            </span>
+          </button>
         </div>
       </div>
 

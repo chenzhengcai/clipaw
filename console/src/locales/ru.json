@@ -2559,6 +2559,9 @@
     "settings": {
       "language": "Язык",
       "theme": "Тема",
+      "colorScheme": "Цветовая схема",
+      "colorSchemeDefault": "По умолчанию",
+      "colorSchemePurple": "Фиолетовый",
       "mode": "Режим",
       "desktopMode": "Режим рабочего стола"
     },

@@ -874,16 +874,29 @@ html[data-theme="purple"] .qwenpaw-bubble[class*="bubble-end"] .qwenpaw-bubble-c
 }
 
 /* ─── 11.9 chat-anywhere 输入区域背景 — 淡紫色调 ──────────────────────── */
+/* 背景插件开启时透明，让自定义背景透过 */
+html[data-theme="purple"] body.qwp-bg-global-on .qwenpaw-chat-anywhere-input,
+html[data-theme="purple"] body.qwp-bg-global-on [class*="chat-anywhere-input"] {
+  background: transparent !important;
+}
+/* 背景插件未开启时使用淡紫色调 */
 html[data-theme="purple"] .qwenpaw-chat-anywhere-input,
+
 html[data-theme="purple"] [class*="chat-anywhere-input"] {
   background: #faf9fe !important;
 }
 
+html[data-theme="purple"] body.qwp-bg-global-on .qwenpaw-chat-anywhere-message-list-welcome {
+  background: transparent !important;
+}
 html[data-theme="purple"] .qwenpaw-chat-anywhere-message-list-welcome {
   background: #faf9fe !important;
 }
 
 /* 消息列表背景 */
+html[data-theme="purple"] body.qwp-bg-global-on .qwenpaw-bubble-list-wrapper {
+  background: transparent !important;
+}
 html[data-theme="purple"] .qwenpaw-bubble-list-wrapper {
   background: #fdfcff !important;
 }
@@ -1375,14 +1388,23 @@ html[data-theme="purple"] .ant-menu-item-selected {
 }
 
 /* layout.css 中的气泡列表 / 输入区 / 欢迎页背景 */
+html[data-theme="purple"] body.qwp-bg-global-on .qwenpaw-bubble-list-wrapper {
+  background: transparent !important;
+}
 html[data-theme="purple"] .qwenpaw-bubble-list-wrapper {
   background: #fdfcff !important;
 }
 
+html[data-theme="purple"] body.qwp-bg-global-on .qwenpaw-chat-anywhere-input {
+  background: transparent !important;
+}
 html[data-theme="purple"] .qwenpaw-chat-anywhere-input {
   background: #faf9fe !important;
 }
 
+html[data-theme="purple"] body.qwp-bg-global-on .qwenpaw-chat-anywhere-message-list-welcome {
+  background: transparent !important;
+}
 html[data-theme="purple"] .qwenpaw-chat-anywhere-message-list-welcome {
   background: #faf9fe !important;
 }

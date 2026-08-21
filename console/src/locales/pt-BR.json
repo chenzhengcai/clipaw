@@ -2788,6 +2788,9 @@
     "settings": {
       "language": "Idioma",
       "theme": "Tema",
+      "colorScheme": "Esquema de cores",
+      "colorSchemeDefault": "Padrão",
+      "colorSchemePurple": "Roxo",
       "mode": "Modo",
       "desktopMode": "Modo Desktop"
     },

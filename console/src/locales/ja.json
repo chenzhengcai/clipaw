@@ -2544,6 +2544,9 @@
     "settings": {
       "language": "言語",
       "theme": "テーマ",
+      "colorScheme": "配色",
+      "colorSchemeDefault": "デフォルト",
+      "colorSchemePurple": "パープル",
       "mode": "モード",
       "desktopMode": "デスクトップモード"
     },

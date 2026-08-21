@@ -267,6 +267,9 @@
     "settings": {
       "language": "Bahasa",
       "theme": "Tema",
+      "colorScheme": "Skema Warna",
+      "colorSchemeDefault": "Default",
+      "colorSchemePurple": "Ungu",
       "mode": "Mode",
       "desktopMode": "Mode Desktop"
     },

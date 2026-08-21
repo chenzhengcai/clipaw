@@ -256,6 +256,9 @@
     "settings": {
       "language": "Language",
       "theme": "Theme",
+      "colorScheme": "Color Scheme",
+      "colorSchemeDefault": "Default",
+      "colorSchemePurple": "Purple",
       "mode": "Mode",
       "desktopMode": "Desktop Mode"
     },
