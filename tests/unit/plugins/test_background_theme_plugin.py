@@ -40,10 +40,11 @@ app.include_router(bg_plugin.router, prefix="/api/background-theme")
 
 @pytest.fixture(autouse=True)
 def _use_tmp_storage(tmp_path: Path):
-    """Redirect library dir + config file to a temp directory."""
+    """Redirect data dir + library dir + config file to a temp directory."""
     library_dir = tmp_path / "library"
     config_file = tmp_path / "config.json"
     with (
+        patch.object(bg_plugin, "_DATA_DIR", tmp_path),
         patch.object(bg_plugin, "_LIBRARY_DIR", library_dir),
         patch.object(bg_plugin, "_CONFIG_FILE", config_file),
     ):

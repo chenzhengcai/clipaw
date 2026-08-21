@@ -54,5 +54,5 @@ background-theme/
 
 - 通过 `window.QwenPaw.menu.add` 在设置组 (`core.settings-group`) 下注册「背景设置」菜单项(order 95),通过 `window.QwenPaw.route.add` 注册 `/background-settings` 路由。
 - **全局背景**:向 `body` 注入一个 `position: fixed; z-index: -1` 的媒体层,并给 `html/body` 加 `qwp-bg-global-on` class,配合注入的 CSS 将 layout/header/sider/page-content 背景置透明。
-- **聊天背景**:通过 `MutationObserver` 监听聊天主区域 (CSS module 哈希类 `[class*="__chatMainArea__"]`) 的挂载,插入绝对定位媒体层;清除时完全移除,不残留 DOM。
+- **聊天背景**:通过 `MutationObserver` 监听聊天主区域 (CSS module 哈希类 `[class*="__chatMainArea__"]`) 的挂载,插入绝对定位媒体层并给该区域加 `qwp-chat-bg-on` class;注入的 CSS 会把聊天内部的不透明表面(消息列表/输入区/欢迎卡等,含暗色与紫色主题变体)置透明,且仅作用于带媒体层的聊天区域,因此**只设置聊天背景(不设全局背景)也能独立生效**;清除时完全移除,不残留 DOM。
 - 配置变更通过 `qwp-bg-config-changed` 自定义事件通知运行时即时重新应用。

@@ -231,6 +231,25 @@ html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-layout { back
 html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-bubble-list-wrapper,
 html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-input,
 html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-message-list-welcome { background: transparent !important; }
+/* Chat background WITHOUT the global one: the host themes (layout.css and
+   purple/overrides.css) give the chat-area surfaces opaque !important
+   backgrounds and only relax them under body.qwp-bg-global-on. Scoped to
+   the chat host that actually carries the background layer
+   (.qwp-chat-bg-on on [class*="__chatMainArea__"]), so a chat-only
+   background is visible too. The "html body" prefix keeps specificity
+   above the dark-mode and purple-theme !important rules. */
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on .qwenpaw-chat-anywhere-layout,
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on .qwenpaw-bubble-list-wrapper,
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on .qwenpaw-chat-anywhere,
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on .qwenpaw-chat-anywhere-message-list,
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on .qwenpaw-chat-anywhere-message-list-welcome,
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on .qwenpaw-chat-anywhere-welcome-default,
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on .qwenpaw-chat-anywhere-input,
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on [class*="chat-anywhere-input"],
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on [class*="qwenpaw-chat-anywhere-default-footer"],
+html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on [class*="chat-anywhere-footer"] {
+  background: transparent !important;
+}
 /* Sidebar section cards: consistent frosted glass so the menus stay
    readable (and pretty) floating over any background. Same tint, blur
    and border for agentScopedSection / settingsSection /
