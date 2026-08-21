@@ -41,6 +41,7 @@ from ..utils.startup_display import AgentStartupDisplay
 from ..utils.system_info import summarize_python_environment
 from .auth import (
     AuthMiddleware,
+    RuntimeBoundaryMiddleware,
     auto_register_from_env,
     check_proxy_config_sanity,
 )
@@ -762,6 +763,7 @@ register_exception_handlers(app)
 app.add_middleware(AgentContextMiddleware)
 
 app.add_middleware(AuthMiddleware)
+app.add_middleware(RuntimeBoundaryMiddleware)
 
 # Apply CORS middleware if CORS_ORIGINS is set
 if CORS_ORIGINS:

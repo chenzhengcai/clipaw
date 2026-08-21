@@ -6,13 +6,15 @@ import {
   Form,
   Tooltip,
   Popover,
+  Popconfirm,
+  Divider,
   Tour,
 } from "antd";
 import type { TourProps } from "antd";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, MessageSquareText } from "lucide-react";
+import { ChevronDown, MessageSquareText, RotateCw } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useAppMessage } from "../hooks/useAppMessage";
 import AgentSelector from "../components/AgentSelector";
@@ -53,6 +55,8 @@ import type { FlatMenuEntry } from "./registry/adapter";
 import { filterMenuForAgentCapabilities } from "./registry/capabilities";
 import type { MenuItem } from "../plugins/registry/types";
 import type { ReactNode } from "react";
+import { ShieldCheck } from "lucide-react";
+import { hubApi } from "../api/modules/hub";
 import {
   dismissDesktopModeHint,
   shouldShowDesktopModeHint,
@@ -155,11 +159,15 @@ function SectionHeader({
 interface SidebarProps {
   /** Route id of the currently active page (e.g. "core.workspace"). */
   selectedKey: string;
+  hubMode?: boolean;
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────
 
-export default function Sidebar({ selectedKey }: SidebarProps) {
+export default function Sidebar({
+  selectedKey,
+  hubMode = false,
+}: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation();
@@ -168,8 +176,11 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   const currentSessionId = getSessionIdFromPath(location.pathname);
   const chatPath = buildChatPath(currentSessionId);
   const [authEnabled, setAuthEnabled] = useState(false);
+  const [hubAdmin, setHubAdmin] = useState(false);
+  const [hubUsername, setHubUsername] = useState("");
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [accountLoading, setAccountLoading] = useState(false);
+  const [runtimeRestarting, setRuntimeRestarting] = useState(false);
   const [accountForm] = Form.useForm();
   // Start collapsed on mobile so the first paint does not overlay/obscure
   // the main content on narrow viewports.
@@ -283,7 +294,14 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   useEffect(() => {
     authApi
       .getStatus()
-      .then((res) => setAuthEnabled(res.enabled))
+      .then(async (res) => {
+        setAuthEnabled(res.enabled);
+        if (res.mode === "hub") {
+          const user = await hubApi.me();
+          setHubAdmin(user.role === "admin");
+          setHubUsername(user.username);
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -528,7 +546,7 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
   );
 
   const handleUpdateProfile = async (values: {
-    currentPassword: string;
+    currentPassword?: string;
     newUsername?: string;
     newPassword?: string;
   }) => {
@@ -545,18 +563,26 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       return;
     }
 
-    if (!trimmedUsername && !trimmedPassword) {
+    if (!hubMode && !trimmedUsername && !trimmedPassword) {
       message.warning(t("account.nothingToUpdate"));
       return;
     }
 
     setAccountLoading(true);
     try {
-      await authApi.updateProfile(
-        values.currentPassword,
-        trimmedUsername,
-        trimmedPassword,
-      );
+      if (hubMode) {
+        if (!trimmedPassword) {
+          message.warning(t("account.passwordRequired"));
+          return;
+        }
+        await hubApi.changePassword(trimmedPassword);
+      } else {
+        await authApi.updateProfile(
+          values.currentPassword || "",
+          trimmedUsername,
+          trimmedPassword,
+        );
+      }
       message.success(t("account.updateSuccess"));
       setAccountModalOpen(false);
       accountForm.resetFields();
@@ -577,6 +603,23 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
       message.error(msg);
     } finally {
       setAccountLoading(false);
+    }
+  };
+
+  const handleRestartRuntime = async () => {
+    setRuntimeRestarting(true);
+    try {
+      await hubApi.restartOwnRuntime();
+      message.success(t("account.runtimeRestartSuccess"));
+      window.location.reload();
+    } catch (error: unknown) {
+      message.error(
+        error instanceof Error
+          ? error.message
+          : t("account.runtimeRestartFailed"),
+      );
+    } finally {
+      setRuntimeRestarting(false);
     }
   };
 
@@ -981,6 +1024,17 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
 
       {authEnabled && !collapsed && (
         <div className={styles.authActions}>
+          {hubAdmin && (
+            <Button
+              type="text"
+              icon={<ShieldCheck size={16} />}
+              onClick={() => navigate("/hub/admin")}
+              block
+              className={styles.authBtn}
+            >
+              {t("hub.brand.title")}
+            </Button>
+          )}
           <Button
             type="text"
             icon={<SparkSearchUserLine size={16} />}
@@ -1067,20 +1121,52 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
           layout="vertical"
           onFinish={handleUpdateProfile}
         >
+          {hubMode ? (
+            <div className={styles.accountIdentity}>
+              <span>{t("account.username")}</span>
+              <strong>{hubUsername}</strong>
+            </div>
+          ) : (
+            <>
+              <Form.Item
+                name="currentPassword"
+                label={t("account.currentPassword")}
+                rules={[
+                  {
+                    required: true,
+                    message: t("account.currentPasswordRequired"),
+                  },
+                ]}
+              >
+                <Input.Password />
+              </Form.Item>
+              <Form.Item name="newUsername" label={t("account.newUsername")}>
+                <Input placeholder={t("account.newUsernamePlaceholder")} />
+              </Form.Item>
+            </>
+          )}
           <Form.Item
-            name="currentPassword"
-            label={t("account.currentPassword")}
-            rules={[
-              { required: true, message: t("account.currentPasswordRequired") },
-            ]}
+            name="newPassword"
+            label={t("account.newPassword")}
+            rules={
+              hubMode
+                ? [
+                    {
+                      required: true,
+                      message: t("account.passwordRequired"),
+                    },
+                    { min: 8, message: t("hub.validation.passwordMin") },
+                  ]
+                : undefined
+            }
           >
-            <Input.Password />
-          </Form.Item>
-          <Form.Item name="newUsername" label={t("account.newUsername")}>
-            <Input placeholder={t("account.newUsernamePlaceholder")} />
-          </Form.Item>
-          <Form.Item name="newPassword" label={t("account.newPassword")}>
-            <Input.Password placeholder={t("account.newPasswordPlaceholder")} />
+            <Input.Password
+              placeholder={t(
+                hubMode
+                  ? "account.hubPasswordPlaceholder"
+                  : "account.newPasswordPlaceholder",
+              )}
+            />
           </Form.Item>
           <Form.Item
             name="confirmPassword"
@@ -1116,6 +1202,28 @@ export default function Sidebar({ selectedKey }: SidebarProps) {
               {t("account.save")}
             </Button>
           </Form.Item>
+          {hubMode && (
+            <div className={styles.runtimeRecovery}>
+              <Divider />
+              <strong>{t("account.runtimeTitle")}</strong>
+              <p>{t("account.runtimeDescription")}</p>
+              <Popconfirm
+                title={t("account.runtimeRestartConfirmTitle")}
+                description={t("account.runtimeRestartConfirmDescription")}
+                onConfirm={handleRestartRuntime}
+                okText={t("account.runtimeRestart")}
+                cancelText={t("common.cancel")}
+              >
+                <Button
+                  icon={<RotateCw size={16} />}
+                  loading={runtimeRestarting}
+                  block
+                >
+                  {t("account.runtimeRestart")}
+                </Button>
+              </Popconfirm>
+            </div>
+          )}
         </Form>
       </Modal>
     </Sider>
