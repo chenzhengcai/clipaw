@@ -250,6 +250,37 @@ html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on [class*="qwenpaw-chat-anywhere-de
 html body ${CHAT_HOST_SELECTOR}.qwp-chat-bg-on [class*="chat-anywhere-footer"] {
   background: transparent !important;
 }
+/* "All Chats" history panel (embedded panel right of the chat): its surfaces
+   are opaque module styles (embeddedPanel / header / footer / sticky group
+   header / edge fade gradients plus the session-item cards). Clear them
+   while the global background is active so the background image shows
+   through the expanded panel too. Scoped under the panel's hashed module
+   class so generic names (__header__ etc.) cannot leak elsewhere. */
+html.qwp-bg-global-on body.qwp-bg-global-on [class*="__embeddedPanel__"],
+html.qwp-bg-global-on body.qwp-bg-global-on [class*="__embeddedPanel__"] [class*="__header__"],
+html.qwp-bg-global-on body.qwp-bg-global-on [class*="__embeddedPanel__"] [class*="__stickyGroupHeader__"],
+html.qwp-bg-global-on body.qwp-bg-global-on [class*="__embeddedPanel__"] [class*="__topGradient__"],
+html.qwp-bg-global-on body.qwp-bg-global-on [class*="__embeddedPanel__"] [class*="__bottomGradient__"],
+html.qwp-bg-global-on body.qwp-bg-global-on [class*="__embeddedPanel__"] [class*="__footer__"] {
+  background: transparent !important;
+}
+/* Session cards inside the panel: transparent base so the image shows
+   through. Active cards are excluded (:not) so their translucent active
+   fill - including the purple theme's tinted variant - keeps working;
+   hover feedback is re-applied as a translucent fill because the module's
+   own hover rule loses to the specificity-boosted transparent rule. The
+   :not() is attached to the card selector itself (no extra descendant
+   combinator) so nested elements (status dots, avatars) are untouched. */
+html.qwp-bg-global-on body.qwp-bg-global-on
+  [class*="__embeddedPanel__"]
+  [class*="sessionItem-module__drawer__"]:not([class*="sessionItem-module__active__"]) {
+  background: transparent;
+}
+html.qwp-bg-global-on body.qwp-bg-global-on
+  [class*="__embeddedPanel__"]
+  [class*="sessionItem-module__drawer__"]:hover:not([class*="sessionItem-module__active__"]) {
+  background: rgba(127, 127, 127, 0.16);
+}
 /* Sidebar section cards: consistent frosted glass so the menus stay
    readable (and pretty) floating over any background. Same tint, blur
    and border for agentScopedSection / settingsSection /
@@ -283,6 +314,31 @@ html.dark-mode body.qwp-bg-global-on [class*='settingsSection'] {
 html.dark-mode body.qwp-bg-global-on [class*='collapseToggleContainer'] {
   background: rgba(16, 16, 20, 0.62) !important;
   border: 1px solid rgba(255, 255, 255, 0.09) !important;
+}
+/* Sticky agent-selector container at the top of the sidebar: same frosted
+   glass as the section cards instead of its opaque sticky background
+   (incl. the purple theme's !important variants), so the global background
+   shows through while scrolled menu content stays hidden behind the blur.
+   Its sticky position / radius / margins are intentionally untouched. */
+body.qwp-bg-global-on [class*='agentSelectorContainer'] {
+  background: rgba(255, 255, 255, 0.82) !important;
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, 0.55) !important;
+  border-radius: 15px;
+}
+html.dark-mode body.qwp-bg-global-on [class*='agentSelectorContainer'] {
+  background: rgba(16, 16, 20, 0.62) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+}
+/* AgentSelector card inside the sticky container: drop its opaque white
+   card background and hairline border (incl. purple's tinted border) so
+   the selector row blends flat into the frosted container behind it,
+   matching how menu items sit on the other frosted cards. The options
+   dropdown stays opaque on purpose (popup readability). */
+body.qwp-bg-global-on [class*='agentSelectorWrapper'] {
+  background: transparent !important;
+  border-color: transparent !important;
 }
 /* ── Global media layer ── */
 #${GLOBAL_LAYER_ID} { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
