@@ -205,18 +205,31 @@
   const STYLE_CSS = `
 /* ── Global background active: make surfaces transparent ── */
 html.qwp-bg-global-on, html.qwp-bg-global-on body { background: transparent !important; }
-body.qwp-bg-global-on .ant-layout, body.qwp-bg-global-on .qwenpaw-layout,
-body.qwp-bg-global-on .ant-layout-content, body.qwp-bg-global-on .qwenpaw-layout-content { background: transparent !important; }
+/* Layout shells / content / page containers: double prefix (0,3,2) so the
+   dark-mode !important rules (html.dark-mode … = 0,2,1) and purple-theme
+   variants never rely on document order to lose. */
+html.qwp-bg-global-on body.qwp-bg-global-on .ant-layout,
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-layout,
+html.qwp-bg-global-on body.qwp-bg-global-on .ant-layout-content,
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-layout-content { background: transparent !important; }
 /* Header / Sider: the running app uses the qwenpaw- antd prefix plus
-   hashed module classes (index-module__header__* / __sider__*) - cover
-   both prefixes so the background shows through. */
-body.qwp-bg-global-on .qwenpaw-layout-header, body.qwp-bg-global-on .ant-layout-header,
-body.qwp-bg-global-on [class*='index-module__header__'] { background: transparent !important; }
-body.qwp-bg-global-on .qwenpaw-layout-sider, body.qwp-bg-global-on .ant-layout-sider,
-body.qwp-bg-global-on [class*='index-module__sider__'] { background: transparent !important; }
-body.qwp-bg-global-on .page-container { background: transparent !important; }
-body.qwp-bg-global-on .page-content { background: transparent !important; border-color: transparent !important; }
-body.qwp-bg-global-on #root { background: transparent !important; }
+   hashed module classes (index-module__header__* / __sider__* and the dark
+   variant __siderDark__*, which the __sider__ substring selector does NOT
+   match). Cover all of them, and use the html+body.qwp-bg-global-on double
+   prefix (0,3,2) so dark-mode AND purple-theme !important rules
+   (html[data-theme="purple"].dark-mode … = 0,3,1) cannot win. */
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-layout-header,
+html.qwp-bg-global-on body.qwp-bg-global-on .ant-layout-header,
+html.qwp-bg-global-on body.qwp-bg-global-on [class*='index-module__header__'] { background: transparent !important; }
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-layout-sider,
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-layout-sider-dark,
+html.qwp-bg-global-on body.qwp-bg-global-on .ant-layout-sider,
+html.qwp-bg-global-on body.qwp-bg-global-on .ant-layout-sider-dark,
+html.qwp-bg-global-on body.qwp-bg-global-on [class*='index-module__sider__'],
+html.qwp-bg-global-on body.qwp-bg-global-on [class*='index-module__siderDark__'] { background: transparent !important; }
+html.qwp-bg-global-on body.qwp-bg-global-on .page-container { background: transparent !important; }
+html.qwp-bg-global-on body.qwp-bg-global-on .page-content { background: transparent !important; border-color: transparent !important; }
+html.qwp-bg-global-on body.qwp-bg-global-on #root { background: transparent !important; }
 /* Chat input wrapper: solid surface removed while the plugin is on so
    the chat/global background shows through behind the input area. */
 body.qwp-bg-enabled .qwenpaw-chat-anywhere-input-wrapper,
@@ -225,12 +238,17 @@ body.qwp-bg-enabled [class*="chat-anywhere-input-wrapper"] {
 }
 /* Chat surfaces: clear their opaque backgrounds so the global background
    image shows through the conversation window. Covers the layout container,
-   bubble list wrapper, input bar, and welcome card. Use html+body.qwp-bg-global-on
-   prefix for enough specificity to override dark-mode and purple-theme rules. */
+   the chat/message-list wrappers (dark mode paints them #141414 with
+   (0,2,1) !important, purple dark with (0,3,1) !important - both must be
+   listed here and beaten by the double prefix), the bubble list wrapper,
+   input bar, and welcome cards. */
 html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-layout { background: transparent !important; }
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere,
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-message-list,
 html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-bubble-list-wrapper,
 html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-input,
-html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-message-list-welcome { background: transparent !important; }
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-message-list-welcome,
+html.qwp-bg-global-on body.qwp-bg-global-on .qwenpaw-chat-anywhere-welcome-default { background: transparent !important; }
 /* Chat background WITHOUT the global one: the host themes (layout.css and
    purple/overrides.css) give the chat-area surfaces opaque !important
    backgrounds and only relax them under body.qwp-bg-global-on. Scoped to
