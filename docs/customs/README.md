@@ -13,6 +13,7 @@
 | [token-usage-chart-smooth.md](./token-usage-chart-smooth.md) | Token 消耗折线图圆滑曲线修复 — @ant-design/plots v2 API 迁移适配 | 2026-06-19 | 2026-06-19 |
 | [tauri-desktop-build.md](./tauri-desktop-build.md) | Tauri 桌面端打包 — 麦克风权限修复、PyInstaller 脚本修复、GitHub Actions 精简 | 2026-06-19 | 2026-06-19 |
 | [agent-persistence.md](./agent-persistence.md) | Agent 选择持久化 — 三层存储链路，跨重启记住上次使用的 Agent | 2026-06-19 | 2026-06-20 |
+| [model-hide-toggle.md](./model-hide-toggle.md) | 模型隐藏/显示切换 — 眼睛图标、内置模型可隐藏、聊天页过滤 | 2026-08-24 | 2026-08-24 |
 
 ## 快速检索指南（给 LLM）
 
@@ -27,6 +28,7 @@
 | `tauri`, `打包`, `dmg`, `app`, `entitlements`, `Info.plist`, `microphone mac`, `麦克风权限`, `PyInstaller`, `GitHub Actions`, `release`, `NSIS`, `desktop` | [tauri-desktop-build.md](./tauri-desktop-build.md) |
 | `agent`, `智能体`, `选择`, `选择器`, `selector`, `持久化`, `persist`, `记住`, `重启`, `localStorage`, `clientConfig`, `saveClientConfig`, `active_agent`, `default`, `lastChatId`, `setLastChatId`, `clearLastChatId` | [agent-persistence.md](./agent-persistence.md) |
 | `merge`, `合并`, `conflict`, `冲突`, `sessionApi`, `leadingUnresolved`, `reconnectIdentity`, `pendingDraft`, `ChatSessionInitializer` | [purple-theme.md](./purple-theme.md) 变更历史 |
+| `模型隐藏`, `hide model`, `eye`, `眼睛`, `visibility`, `hidden_model_ids`, `setModelVisibility`, `内置模型`, `builtin model`, `RemoteModelManageModal`, `ModelSelector`, `buildEligibleProviders` | [model-hide-toggle.md](./model-hide-toggle.md) |
 
 ## 维护原则
 

@@ -64,18 +64,22 @@ export function buildEligibleProviders(
       if (provider.require_api_key ?? true) return Boolean(provider.api_key);
       return true;
     })
-    .map((provider) => ({
-      id: provider.id,
-      name: provider.name,
-      models: [...(provider.models ?? []), ...(provider.extra_models ?? [])],
-      is_free_tier: provider.is_free_tier,
-      is_custom: provider.is_custom,
-      is_local: provider.is_local,
-      supports_oauth: provider.supports_oauth,
-      oauth_connected: provider.oauth_connected,
-      has_api_key: Boolean(provider.api_key),
-      require_api_key: provider.require_api_key,
-    }));
+    .map((provider) => {
+      const hidden = new Set(provider.hidden_model_ids ?? []);
+      return {
+        id: provider.id,
+        name: provider.name,
+        models: [...(provider.models ?? []), ...(provider.extra_models ?? [])]
+          .filter((model) => !hidden.has(model.id)),
+        is_free_tier: provider.is_free_tier,
+        is_custom: provider.is_custom,
+        is_local: provider.is_local,
+        supports_oauth: provider.supports_oauth,
+        oauth_connected: provider.oauth_connected,
+        has_api_key: Boolean(provider.api_key),
+        require_api_key: provider.require_api_key,
+      };
+    });
 }
 
 export function buildDiscoveryCandidates(

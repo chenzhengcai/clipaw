@@ -12,6 +12,8 @@ import {
   ChevronDown,
   CloudCog,
   Database,
+  Eye,
+  EyeOff,
   FlaskConical,
   Gift,
   PlugZap,
@@ -264,6 +266,28 @@ export function RemoteModelManageModal({
         }
       },
     });
+  };
+
+  const handleToggleModelVisibility = async (
+    modelId: string,
+    modelName: string,
+    hidden: boolean,
+  ) => {
+    try {
+      await api.setModelVisibility(provider.id, modelId, hidden);
+      message.success(
+        t(hidden ? "models.modelHidden" : "models.modelVisible", {
+          name: modelName,
+        }),
+      );
+      await onSaved();
+    } catch (error) {
+      const errMsg =
+        error instanceof Error
+          ? error.message
+          : t("models.visibilityFailed");
+      message.error(errMsg);
+    }
   };
 
   const handleClose = () => {
@@ -650,13 +674,17 @@ export function RemoteModelManageModal({
           <>
             {filteredModels.slice(0, visibleCount).map((m) => {
               const isDeletable = provider.is_custom || extraModelIds.has(m.id);
+              const isHidden = (provider.hidden_model_ids ?? []).includes(m.id);
               const isConfigOpen = configOpenModelId === m.id;
+              const hiddenTextStyle = isHidden
+                ? { opacity: 0.45, fontStyle: "italic" as const }
+                : undefined;
               return (
                 <div key={m.id}>
                   <div className={styles.modelListItem}>
                     <div className={styles.modelListItemInfo}>
-                      <span className={styles.modelListItemName}>{m.name}</span>
-                      <span className={styles.modelListItemId}>{m.id}</span>
+                      <span className={styles.modelListItemName} style={hiddenTextStyle}>{m.name}</span>
+                      <span className={styles.modelListItemId} style={hiddenTextStyle}>{m.id}</span>
                     </div>
                     <div className={styles.modelListItemActions}>
                       <CapabilityTags model={m} isDark={isDark} />
@@ -701,6 +729,27 @@ export function RemoteModelManageModal({
                             : "models.builtin",
                         )}
                       </Tag>
+                      {isHidden && (
+                        <Tag
+                          style={{
+                            fontSize: 11,
+                            marginRight: 4,
+                            color: isDark
+                              ? "rgba(255,255,255,0.45)"
+                              : "#999",
+                            background: "transparent",
+                            border: isDark
+                              ? "1px solid rgba(255,255,255,0.15)"
+                              : "1px solid #d9d9d9",
+                          }}
+                        >
+                          <EyeOff
+                            size={14}
+                            style={{ marginRight: 4, verticalAlign: "-3px" }}
+                          />
+                          {t("models.hidden", "已隐藏")}
+                        </Tag>
+                      )}
                       <span
                         className={styles.modelListItemActionDivider}
                         style={{
@@ -757,6 +806,39 @@ export function RemoteModelManageModal({
                             setConfigOpenModelId(isConfigOpen ? null : m.id)
                           }
                           style={darkBtnStyle}
+                        />
+                      </Tooltip>
+                      <Tooltip
+                        title={t(
+                          isHidden
+                            ? "models.restoreModel"
+                            : "models.hideModel",
+                        )}
+                      >
+                        <Button
+                          type="text"
+                          size="small"
+                          className={styles.modelListActionButton}
+                          aria-label={t(
+                            isHidden
+                              ? "models.restoreModel"
+                              : "models.hideModel",
+                          )}
+                          icon={
+                            isHidden ? (
+                              <EyeOff size={18} />
+                            ) : (
+                              <Eye size={18} />
+                            )
+                          }
+                          onClick={() =>
+                            handleToggleModelVisibility(
+                              m.id,
+                              m.name,
+                              !isHidden,
+                            )
+                          }
+                          style={isHidden ? { opacity: 0.45 } : darkBtnStyle}
                         />
                       </Tooltip>
                       {isDeletable && (
