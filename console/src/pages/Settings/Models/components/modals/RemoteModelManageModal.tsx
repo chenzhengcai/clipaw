@@ -276,7 +276,7 @@ export function RemoteModelManageModal({
     try {
       await api.setModelVisibility(provider.id, modelId, hidden);
       message.success(
-        t(hidden ? "models.modelHidden" : "models.modelVisible", {
+        t(hidden ? "modelSelector.modelHidden" : "modelSelector.modelVisible", {
           name: modelName,
         }),
       );
@@ -285,7 +285,7 @@ export function RemoteModelManageModal({
       const errMsg =
         error instanceof Error
           ? error.message
-          : t("models.visibilityFailed");
+          : t("modelSelector.visibilityFailed");
       message.error(errMsg);
     }
   };
@@ -747,7 +747,7 @@ export function RemoteModelManageModal({
                             size={14}
                             style={{ marginRight: 4, verticalAlign: "-3px" }}
                           />
-                          {t("models.hidden", "已隐藏")}
+                          {t("modelSelector.hidden", "已隐藏")}
                         </Tag>
                       )}
                       <span
@@ -811,8 +811,8 @@ export function RemoteModelManageModal({
                       <Tooltip
                         title={t(
                           isHidden
-                            ? "models.restoreModel"
-                            : "models.hideModel",
+                            ? "modelSelector.restoreModel"
+                            : "modelSelector.hideModel",
                         )}
                       >
                         <Button
@@ -821,8 +821,8 @@ export function RemoteModelManageModal({
                           className={styles.modelListActionButton}
                           aria-label={t(
                             isHidden
-                              ? "models.restoreModel"
-                              : "models.hideModel",
+                              ? "modelSelector.restoreModel"
+                              : "modelSelector.hideModel",
                           )}
                           icon={
                             isHidden ? (
