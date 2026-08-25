@@ -122,6 +122,8 @@ jobs:
 
       - name: Stage Tauri Windows installer
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           $installer = Get-ChildItem "console/src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
           if (-not $installer) {
