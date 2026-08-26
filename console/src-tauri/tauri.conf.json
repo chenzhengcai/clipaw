@@ -38,7 +38,8 @@
     "targets": ["app", "nsis"],
     "macOS": {
       "infoPlist": "Info.plist",
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "14.0"
     },
     "icon": [
       "../../scripts/pack/assets/icon.icns",
@@ -78,9 +79,6 @@
         "compression": "zlib",
         "displayLanguageSelector": false
       }
-    },
-    "macOS": {
-      "minimumSystemVersion": "14.0"
     }
   },
   "plugins": {
