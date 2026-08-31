@@ -151,13 +151,11 @@ export const useAgentStore = create<AgentStore>()(
       setLastChatId: (agentId, chatId) => {
         // Never persist a temporary local timestamp id. These ids only exist
         // in memory before the first message is sent and should not be
-        // restored on agent switch.
+        // restored on agent switch. IGNORE the call entirely — deleting the
+        // existing entry would lose the agent's last real chat id, causing
+        // the session to vanish when switching back (issue: agent-switch
+        // session loss).
         if (isLocalTimestamp(chatId)) {
-          set((state) => {
-            const remainingChatIds = { ...state.lastChatIdByAgent };
-            delete remainingChatIds[agentId];
-            return { lastChatIdByAgent: remainingChatIds };
-          });
           return;
         }
         set((state) => ({

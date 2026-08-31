@@ -195,10 +195,12 @@ describe("agentStore", () => {
     expect(useAgentStore.getState().getLastChatId("agent-1")).toBeUndefined();
   });
 
-  it("setLastChatId removes existing entry when given a temporary local id", () => {
+  it("setLastChatId ignores temporary local id and preserves existing entry", () => {
+    // Regression: previously a temp id would DELETE the stored real id,
+    // causing the agent's last chat to vanish on switch-back.
     useAgentStore.getState().setLastChatId("agent-1", "chat-1");
     useAgentStore.getState().setLastChatId("agent-1", "1785114733908-0l0jmai");
-    expect(useAgentStore.getState().getLastChatId("agent-1")).toBeUndefined();
+    expect(useAgentStore.getState().getLastChatId("agent-1")).toBe("chat-1");
     expect(useAgentStore.getState().getLastChatId("agent-2")).toBeUndefined();
   });
 });

@@ -406,7 +406,12 @@ class ChatManager:  # pylint: disable=too-many-public-methods
         chat_id: str,
         finished_at: datetime,
     ) -> Optional[ChatSpec]:
-        """Persist the newest task completion marker for one chat."""
+        """Persist the newest task completion marker for one chat.
+
+        Also clears any ``pending_user_message`` from chat meta — the turn
+        is now fully persisted in session state, so the early-persisted
+        placeholder is no longer needed.
+        """
         async with self._lock:
             existing = await self._repo.get_chat(chat_id)
             if existing is None:
@@ -416,12 +421,40 @@ class ChatManager:  # pylint: disable=too-many-public-methods
                 and existing.last_finished_at >= finished_at
             ):
                 return existing
+            meta = dict(existing.meta or {})
+            meta.pop("pending_user_message", None)
             updated = existing.model_copy(
                 update={
                     "last_finished_at": finished_at,
                     "updated_at": max(existing.updated_at, finished_at),
+                    "meta": meta,
                 },
             )
+            await self._repo.upsert_chat(updated)
+            return updated
+
+    async def set_pending_user_message(
+        self,
+        chat_id: str,
+        msg_dump: dict,
+    ) -> Optional[ChatSpec]:
+        """Persist a pending user message into chat meta under lock.
+
+        Called by the console router *before* a run starts so a mid-run
+        agent switch does not lose the user message from history.  The
+        read-modify-write is fully serialized under ``self._lock`` —
+        unlike a bare repo call, it cannot race with
+        ``mark_chat_finished`` or ``set_session_project_dirs``.  The
+        entry is cleared by ``mark_chat_finished`` once the turn is
+        fully persisted in session state.
+        """
+        async with self._lock:
+            existing = await self._repo.get_chat(chat_id)
+            if existing is None:
+                return None
+            meta = dict(existing.meta or {})
+            meta["pending_user_message"] = msg_dump
+            updated = existing.model_copy(update={"meta": meta})
             await self._repo.upsert_chat(updated)
             return updated
 

@@ -787,6 +787,26 @@ async def get_chat(
         if memory_raw:
             memories, _summary = parse_legacy_memory_state(memory_raw)
 
+    # While a run is still active the user message has not yet been
+    # persisted into ``agent.state.context`` (that happens at POST_RESPONSE).
+    # Merge the early-persisted pending message from chat.meta so the
+    # history endpoint returns it even mid-run (issue: agent-switch
+    # session loss).
+    if status == "running":
+        pending_raw = (chat_spec.meta or {}).get("pending_user_message")
+        if pending_raw:
+            try:
+                pending_msg = Msg.model_validate(pending_raw)
+                # Only append when the persisted context does not already
+                # end with this user message (avoids duplicates on reload).
+                if not memories or memories[-1].role != "user":
+                    memories.append(pending_msg)
+            except Exception:
+                logger.debug(
+                    "Failed to parse pending_user_message",
+                    exc_info=True,
+                )
+
     messages = agentscope_msg_to_message(memories)
     return ChatHistory(messages=messages, status=status)
 

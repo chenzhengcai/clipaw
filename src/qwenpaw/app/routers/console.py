@@ -334,6 +334,76 @@ def _empty_sse_response() -> StreamingResponse:
     )
 
 
+async def _persist_pending_user_message(
+    workspace,
+    chat_id: str,
+    content_parts: list,
+    message_metadata: dict | None,
+) -> None:
+    """Persist the user message into the chat's meta *before* the run starts.
+
+    The normal save path (``SessionSaveHook``, POST_RESPONSE) only writes
+    after generation completes.  If the user switches agents mid-run, the
+    frontend aborts the SSE connection and the session state on disk has no
+    record of the user message — the chat appears empty on switch-back.
+
+    This writes the user message into ``chat.meta["pending_user_message"]``
+    so ``getChat`` can merge it into history while the run is still active.
+    ``SessionSaveHook`` does not touch chat meta, so the entry survives
+    until explicitly cleared by ``mark_chat_finished``.
+    """
+    if not content_parts:
+        return
+    try:
+        from agentscope.message import Msg, TextBlock
+
+        blocks = []
+        for part in content_parts:
+            if isinstance(part, dict):
+                ptype = part.get("type")
+                if ptype == "text":
+                    text = part.get("text", "")
+                    if text:
+                        blocks.append(TextBlock(type="text", text=text))
+                # Media blocks (image/audio/video/file) are intentionally
+                # skipped: they are already persisted as files on disk and
+                # the frontend re-attaches them from the pending cache.
+            elif hasattr(part, "text"):
+                text = getattr(part, "text", "") or ""
+                if text:
+                    blocks.append(TextBlock(type="text", text=text))
+
+        if not blocks:
+            return
+
+        msg = Msg(
+            name="user",
+            role="user",
+            content=blocks,
+            metadata=message_metadata or {},
+        )
+
+        chat_manager = workspace.chat_manager
+        if chat_manager is None:
+            return
+
+        # Delegate to the ChatManager public method so the
+        # read-modify-write of chat.meta is serialized under the
+        # manager lock — a bare repo call here would race with
+        # mark_chat_finished and set_session_project_dirs.
+        await chat_manager.set_pending_user_message(
+            chat_id,
+            msg.model_dump(mode="json"),
+        )
+    except Exception:
+        logger.warning(
+            "failed to persist pending user message for chat=%s; "
+            "history may be incomplete on mid-run agent switch",
+            chat_id,
+            exc_info=True,
+        )
+
+
 def _tail_text_file(
     path: Path,
     *,
@@ -420,6 +490,16 @@ async def post_console_chat(
         # Project directories are resolved exactly once, inside
         # ContextVarsSetupHook (from the chat meta persisted above);
         # the router no longer pre-resolves or injects them.
+
+        # Persist the user message into chat meta *before* the run
+        # starts so that a mid-run agent switch does not lose it from
+        # history (the normal POST_RESPONSE save happens too late).
+        await _persist_pending_user_message(
+            workspace,
+            chat.id,
+            native_payload["content_parts"],
+            native_payload.get("message_metadata"),
+        )
 
         queue, is_new_run = await tracker.attach_or_start(
             chat.id,

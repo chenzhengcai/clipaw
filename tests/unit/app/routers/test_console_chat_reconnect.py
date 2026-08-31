@@ -46,11 +46,27 @@ def console_workspace(workspace_mock):
     )
     workspace_mock.console_channel = console_channel
 
-    chat = MagicMock(name="ChatSpec")
-    chat.id = "chat-1"
-    chat.name = "New Chat"
+    from qwenpaw.app.chats.models import ChatSpec
+
+    chat = ChatSpec(
+        id="chat-1",
+        session_id="console:default",
+        user_id="default",
+        channel="console",
+        name="New Chat",
+        meta={},
+    )
     workspace_mock.chat_manager = MagicMock(name="ChatManager")
     workspace_mock.chat_manager.get_or_create_chat = AsyncMock(
+        return_value=chat,
+    )
+    workspace_mock.chat_manager.get_chat = AsyncMock(return_value=chat)
+    workspace_mock.chat_manager.mark_chat_finished = AsyncMock()
+    # set_pending_user_message is awaited by _persist_pending_user_message
+    # for every non-reconnect POST; must be an AsyncMock so shared tests
+    # (e.g. test_new_message_rejects_active_run) do not await a plain
+    # MagicMock and raise. Individual tests override the side_effect.
+    workspace_mock.chat_manager.set_pending_user_message = AsyncMock(
         return_value=chat,
     )
 
@@ -241,3 +257,77 @@ async def test_new_message_rejects_active_run(
         "use a different session_id."
     )
     assert console_workspace.console_channel.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_new_message_persists_pending_user_message(
+    app,
+    console_workspace,
+    monkeypatch,
+):
+    """A fresh send must persist the user message into chat meta
+    *before* the run starts, so a mid-run agent switch does not lose it
+    from history (issue: agent-switch session loss)."""
+    from starlette.requests import Request
+    from qwenpaw.app.routers import console
+
+    set_pending_calls: list = []
+
+    async def _set_pending(chat_id_arg, msg_dump):
+        set_pending_calls.append((chat_id_arg, msg_dump))
+
+    console_workspace.chat_manager.set_pending_user_message = AsyncMock(
+        side_effect=_set_pending,
+    )
+
+    monkeypatch.setattr(
+        console,
+        "_persist_pending_project_dirs",
+        AsyncMock(side_effect=lambda _ws, chat, _payload: chat),
+    )
+
+    request = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/api/console/chat",
+            "headers": [],
+            "app": app,
+        },
+    )
+
+    async def _quick_stream(_payload):
+        yield 'data: {"object":"response","status":"completed"}\n\n'
+
+    console_workspace.console_channel.stream_one = _quick_stream
+
+    response = await console.post_console_chat(
+        request_data={
+            "session_id": "console:default",
+            "user_id": "default",
+            "channel": "console",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello world"},
+                    ],
+                },
+            ],
+        },
+        request=request,
+    )
+
+    # Drain the SSE stream so the run completes.
+    async for _ in response.body_iterator:
+        pass
+
+    # The pending message must have been saved into chat meta before the
+    # run started, via the locking ChatManager public method (not a bare
+    # repo call that would race with mark_chat_finished).
+    console_workspace.chat_manager.set_pending_user_message.assert_awaited()
+    assert len(set_pending_calls) == 1
+    chat_id_arg, msg_dump = set_pending_calls[0]
+    assert chat_id_arg == "chat-1"
+    assert msg_dump["role"] == "user"
+    assert msg_dump["content"][0]["text"] == "hello world"
