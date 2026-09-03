@@ -2015,6 +2015,7 @@
     "loadingAgentSettings": "Loading agent model settings",
     "agentSettingsSaveFailed": "Failed to save agent model settings",
     "agentSettingsSaved": "Agent model settings saved",
+    "saveAgentSettings": "Save routing settings",
     "thinkingLevel": "Thinking level",
     "thinkingUnsupported": "The active model does not advertise configurable thinking.",
     "thinking": {
@@ -2031,7 +2032,6 @@
     "configuredModels": "Configured models",
     "freeModelsOnly": "Free models only",
     "chooseFallback": "Choose a fallback model",
-    "addFallback": "Add fallback model",
     "moveFallbackUp": "Move {{model}} up",
     "moveFallbackDown": "Move {{model}} down",
     "removeFallback": "Remove {{model}}",
