@@ -1,6 +1,8 @@
 import {
   AgentScopeRuntimeWebUI,
   IAgentScopeRuntimeWebUIOptions,
+  type IAgentScopeRuntimeWebUIInputData,
+  type IAgentScopeRuntimeWebUISenderBeforeSubmitResult,
   type IAgentScopeRuntimeWebUIRef,
 } from "@agentscope-ai/chat";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1862,8 +1864,6 @@ export default function ChatPage() {
 
   const pendingClearHistoryRef = useRef(false);
   const whisperSpeechRef = useRef<WhisperSpeechButtonRef>(null);
-  const voiceBaseRef = useRef(""); // text before voice started
-  const voiceLenRef = useRef(0); // length of voice text in textarea
   const [whisperEnabled, setWhisperEnabled] = useState(false);
   const [whisperChecked, setWhisperChecked] = useState(false);
 
@@ -1878,36 +1878,18 @@ export default function ChatPage() {
       .finally(() => setWhisperChecked(true));
   }, []);
 
-  // Track voice-inserted text to replace (not append) cumulative ASR results
-  const handleWhisperTranscription = useCallback(
-    (text: string, isPartial = false) => {
-      const senderContainer = document.querySelector('[class*="sender"]');
-      const textarea = senderContainer?.querySelector(
-        "textarea",
-      ) as HTMLTextAreaElement | null;
-      if (!textarea) return;
-
-      const current = textarea.value || "";
-
-      if (isPartial) {
-        // Replace the voice portion: keep prefix, append new voice text
-        const prefixLen = current.length - voiceLenRef.current;
-        const prefix = prefixLen > 0 ? current.slice(0, prefixLen) : "";
-        voiceLenRef.current = text.length;
-        const newValue = prefix ? `${prefix}${text}` : text;
-        setTextareaValue(textarea, newValue);
-      } else {
-        // Final: keep what was there before voice started, append final text
-        voiceLenRef.current = 0;
-        const newValue = voiceBaseRef.current
-          ? `${voiceBaseRef.current}${text}`
-          : text;
-        setTextareaValue(textarea, newValue);
-      }
+  const handleWhisperTranscription = useCallback((text: string) => {
+    const senderContainer = document.querySelector('[class*="sender"]');
+    const textarea = senderContainer?.querySelector(
+      "textarea",
+    ) as HTMLTextAreaElement | null;
+    if (textarea) {
+      const currentValue = textarea.value || "";
+      const newValue = currentValue ? `${currentValue} ${text}` : text;
+      setTextareaValue(textarea, newValue);
       textarea.focus();
-    },
-    [],
-  );
+    }
+  }, []);
 
   useMessageHistoryNavigation(chatRef, isChatActive, isComposingRef);
   useChatInputDraft(isChatActive, selectedAgent);
@@ -2219,73 +2201,24 @@ export default function ChatPage() {
     [chatId, dispatchFilesDrawer],
   );
 
-  // Voice shortcut — configurable, supports toggle and hold modes
-  const shortcutCleanupRef = useRef<(() => void) | null>(null);
+  // Shortcut key for voice recording (Ctrl+Shift+M or Cmd+Shift+M on Mac)
   useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      import(
-        "@/pages/Settings/VoiceTranscription/components/ShortcutSettings"
-      ),
-      import(
-        "@/pages/Settings/VoiceTranscription/components/VolcengineConfigCard"
-      ),
-    ]).then(([shortcutMod, voiceMod]) => {
-      if (cancelled) return;
-      const { loadShortcut, loadShortcutMode, matchShortcut } = shortcutMod;
-      const { isVoiceConnected } = voiceMod;
-
-      let shortcut = loadShortcut();
-      let mode = loadShortcutMode();
-      let holdActive = false;
-
-      const onStorage = () => {
-        shortcut = loadShortcut();
-        mode = loadShortcutMode();
-      };
-      window.addEventListener("storage", onStorage);
-
-      const onKeyDown = (e: KeyboardEvent) => {
-        if (!isChatActive() && !location.pathname.startsWith("/coding")) return;
-        if (!whisperEnabled) return;
-        if (!isVoiceConnected()) return;
-        if (!matchShortcut(e, shortcut)) return;
-
+    const handleShortcut = (e: KeyboardEvent) => {
+      if (!isChatActive()) return;
+      // Check for Ctrl+Shift+M (Windows/Linux) or Cmd+Shift+M (Mac)
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.shiftKey &&
+        e.key.toLowerCase() === "m"
+      ) {
         e.preventDefault();
-        if (mode === "hold") {
-          if (!whisperSpeechRef.current?.isRecording()) {
-            whisperSpeechRef.current?.toggleRecording();
-            holdActive = true;
-          }
-        } else {
+        if (whisperEnabled) {
           whisperSpeechRef.current?.toggleRecording();
         }
-      };
-
-      const onKeyUp = (e: KeyboardEvent) => {
-        if (mode !== "hold" || !holdActive) return;
-        if (!matchShortcut(e, shortcut)) return;
-        e.preventDefault();
-        if (whisperSpeechRef.current?.isRecording()) {
-          whisperSpeechRef.current?.toggleRecording();
-        }
-        holdActive = false;
-      };
-
-      document.addEventListener("keydown", onKeyDown);
-      document.addEventListener("keyup", onKeyUp);
-
-      shortcutCleanupRef.current = () => {
-        document.removeEventListener("keydown", onKeyDown);
-        document.removeEventListener("keyup", onKeyUp);
-        window.removeEventListener("storage", onStorage);
-      };
-    });
-
-    return () => {
-      cancelled = true;
-      shortcutCleanupRef.current?.();
+      }
     };
+    document.addEventListener("keydown", handleShortcut);
+    return () => document.removeEventListener("keydown", handleShortcut);
   }, [isChatActive, whisperEnabled]);
   chatIdRef.current = chatId;
   navigateRef.current = navigate;
@@ -2929,15 +2862,16 @@ export default function ChatPage() {
         value: skill.name,
         description: "",
       }));
-    const handleBeforeSubmit = async () => {
+    const handleBeforeSubmit = async (
+      inputData: IAgentScopeRuntimeWebUIInputData,
+    ): Promise<boolean | IAgentScopeRuntimeWebUISenderBeforeSubmitResult> => {
       if (isComposingRef.current) return false;
       // Single-tab ownership: non-owner tabs are queue-only. Re-route every
       // submit (Enter / send button / programmatic) to the shared queue and
       // abort the actual SDK send. The owner tab will pick the item up via
       // cross-tab broadcast and send it.
       if (!isOwnerRef.current) {
-        const textarea = getActiveSenderTextarea();
-        const val = textarea?.value.trim() ?? "";
+        const val = inputData.query.trim();
         if (!val) return false;
         const currentQ = useMessageQueueStore
           .getState()
@@ -2965,19 +2899,12 @@ export default function ChatPage() {
           channel: enqueueIdentity.channel,
         });
         pendingFileListRef.current = [];
+        const textarea = getActiveSenderTextarea();
         if (textarea) setTextareaValue(textarea, "");
         // Clear sender attachment preview (deferred to next tick)
         clearSenderAttachments();
         localStorage.removeItem(getDraftStorageKey(selectedAgent));
         draftSuppressed = true;
-        // Stop voice recording if active
-        if (whisperSpeechRef.current?.isRecording()) {
-          whisperSpeechRef.current?.toggleRecording();
-        }
-        whisperSpeechRef.current?.resetSession();
-        // Clear voice tracking refs
-        voiceBaseRef.current = "";
-        voiceLenRef.current = 0;
         return false;
       }
       localStorage.removeItem(getDraftStorageKey(selectedAgent));
@@ -2985,28 +2912,19 @@ export default function ChatPage() {
       // Clear pending attachments when sending directly (not through queue)
       pendingFileListRef.current = [];
 
+      const prepared = usesQwenPawBackend
+        ? beginLoopModeSubmission(inputData.query)
+        : inputData.query;
+      pendingSenderClearRef.current = prepared;
+
       const textarea = getActiveSenderTextarea();
       if (textarea) {
-        const prepared = usesQwenPawBackend
-          ? beginLoopModeSubmission(textarea.value)
-          : textarea.value;
         if (prepared !== textarea.value) {
           setTextareaValue(textarea, prepared);
         }
-        pendingSenderClearRef.current = prepared;
       }
 
-      // Stop voice recording if active
-      if (whisperSpeechRef.current?.isRecording()) {
-        whisperSpeechRef.current?.toggleRecording();
-      }
-      // Reset voice ASR session so new speech starts fresh after send
-      whisperSpeechRef.current?.resetSession();
-      // Clear voice tracking refs so next voice input starts clean
-      voiceBaseRef.current = "";
-      voiceLenRef.current = 0;
-
-      return true;
+      return { proceed: true, query: prepared };
     };
 
     // ── Resolve plugin extension snapshots ────────────────────────────────
@@ -3239,8 +3157,8 @@ export default function ChatPage() {
       },
       welcome: {
         ...i18nConfig.welcome,
-        nick: extNick ?? "CliPaw",
-        avatar: extAvatar ?? "/clipaw.png",
+        nick: extNick ?? "QwenPaw",
+        avatar: extAvatar ?? "/qwenpaw.png",
         ...(extGreeting !== undefined ? { greeting: extGreeting } : {}),
         ...(extDescription !== undefined
           ? { description: extDescription }
@@ -3283,13 +3201,6 @@ export default function ChatPage() {
               <WhisperSpeechButton
                 ref={whisperSpeechRef}
                 onTranscription={handleWhisperTranscription}
-                onStart={() => {
-                  const textarea = document
-                    .querySelector('[class*="sender"]')
-                    ?.querySelector("textarea") as HTMLTextAreaElement | null;
-                  voiceBaseRef.current = textarea?.value || "";
-                  voiceLenRef.current = 0;
-                }}
               />
             ) : null}
             {usesQwenPawBackend && (
