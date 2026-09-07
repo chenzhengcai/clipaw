@@ -1523,6 +1523,47 @@ html[data-theme="purple"].dark-mode [class*="collapseToggle"]:hover {
   color: var(--color-primary, #a78bfa) !important;
 }
 
+/* ─── 精简模式 Agent 功能折叠按钮（simpleAgentDisclosure）───────────────── */
+/* 源码 index.module.less：hover/focus/expanded 态 color: var(--colorPrimary, #ff7f16)
+   （--colorPrimary 驼峰未定义，回退橙色）；
+   line 渐变 / handle 边框背景 / box-shadow rgba(255,127,22,...) 同为橙色。
+   注：[class*="simpleAgentDisclosure"] 子串同时命中按钮与其 Line/Handle 子元素，
+   子元素随父级 hover 一起触发，color 继承自按钮，无副作用。 */
+html[data-theme="purple"] [class*="simpleAgentDisclosure"]:hover,
+html[data-theme="purple"] [class*="simpleAgentDisclosure"]:focus-visible,
+html[data-theme="purple"] [class*="simpleAgentDisclosure"][aria-expanded="true"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"] [class*="simpleAgentDisclosure"]:hover [class*="simpleAgentDisclosureLine"],
+html[data-theme="purple"] [class*="simpleAgentDisclosure"]:focus-visible [class*="simpleAgentDisclosureLine"],
+html[data-theme="purple"] [class*="simpleAgentDisclosure"][aria-expanded="true"] [class*="simpleAgentDisclosureLine"] {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-primary, #7c5cfc) 44%, transparent)
+  ) !important;
+}
+
+html[data-theme="purple"] [class*="simpleAgentDisclosure"]:hover [class*="simpleAgentDisclosureHandle"],
+html[data-theme="purple"] [class*="simpleAgentDisclosure"]:focus-visible [class*="simpleAgentDisclosureHandle"],
+html[data-theme="purple"] [class*="simpleAgentDisclosure"][aria-expanded="true"] [class*="simpleAgentDisclosureHandle"] {
+  border-color: color-mix(in srgb, var(--color-primary, #7c5cfc) 34%, transparent) !important;
+  background: color-mix(in srgb, var(--color-primary, #7c5cfc) 9%, transparent) !important;
+  box-shadow: 0 3px 10px rgba(124, 92, 252, 0.12) !important;
+}
+
+html[data-theme="purple"] [class*="simpleAgentDisclosure"]:focus-visible {
+  outline-color: color-mix(in srgb, var(--color-primary, #7c5cfc) 30%, transparent) !important;
+}
+
+/* 暗色 — 源码 dark override 中 hover 态 color: #ff8f32（硬编码橙色） */
+html[data-theme="purple"].dark-mode [class*="simpleAgentDisclosure"]:hover,
+html[data-theme="purple"].dark-mode [class*="simpleAgentDisclosure"]:focus-visible,
+html[data-theme="purple"].dark-mode [class*="simpleAgentDisclosure"][aria-expanded="true"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    二十、全局 Tabs 覆盖 — .module.less 中 :global(.qwenpaw-tabs-tab-active) 等
    多个页面（Security、Config、Environments）中通过 :global 使用 #ff7f16
@@ -1905,6 +1946,17 @@ html[data-theme="purple"] [class*="heartbeatContainer"] {
 /* 前面 21.1~21.17 已为各页面添加了精确的 class 选择器覆盖，
    无需使用宽泛的 [class*="selected"][class*="Card"] 通配选择器，
    避免误伤其他组件。 */
+
+/* ─── 21.19 SessionGroupHeader — source 固定分组（Cron/Subagents）────── */
+/* 源码 color: var(--colorPrimary, #ff7f16) —— --colorPrimary（驼峰）未定义，
+   回退橙色；背景的 var(--color-primary) 能正确解析为紫色，无需覆盖。 */
+html[data-theme="purple"] [class*="SessionGroupHeader-module__source__"] {
+  color: var(--color-primary, #7c5cfc) !important;
+}
+
+html[data-theme="purple"].dark-mode [class*="SessionGroupHeader-module__source__"] {
+  color: var(--color-primary, #a78bfa) !important;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    二十二、AgentSelector — #f07e26 / #f5a05a 橙色覆盖（补充）
