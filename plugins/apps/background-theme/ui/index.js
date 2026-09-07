@@ -376,6 +376,12 @@ html.dark-mode body.qwp-bg-global-on [class*='sidebarSessionList-module__session
 html.dark-mode body.qwp-bg-global-on [class*='sidebarSessionList-module__scroll__'] {
   background: rgba(16, 16, 20, 0.62) !important;
 }
+/* History collapsed: the scroll area is unmounted, so the header becomes the
+   sessionList container's only child. Round the header itself so the collapsed
+   frosted card keeps the same 12px corners as the expanded layout. */
+body.qwp-bg-global-on [class*='sidebarSessionList-module__sessionListHeader__']:only-child {
+  border-radius: 12px;
+}
 /* ── Global media layer ── */
 #${GLOBAL_LAYER_ID} { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
 #${GLOBAL_LAYER_ID} .qwp-bg-media { width: 100%; height: 100%; object-fit: var(--qwp-fit, cover); display: block; }
