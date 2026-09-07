@@ -1988,7 +1988,9 @@ html[data-theme="purple"].dark-mode [class*="sidebarSettingsPanel"] [class*="sel
    二十五、sidebarSessionList — #f9f8f4 + #ff7f16
    ═══════════════════════════════════════════════════════════════════════════ */
 
-html[data-theme="purple"] [class*="sidebarSessionList"] {
+/* 仅匹配容器本身，排除 sidebarSessionList-module__newChatBtn__KHYuq 等子元素 */
+html[data-theme="purple"] [class*="sidebarSessionList-module__sessionList"],
+html[data-theme="purple"] [class*="sidebarSessionList-module__sessionListHeader"] {
   background: var(--color-bg-base, #f8f7fc) !important;
 }
 
