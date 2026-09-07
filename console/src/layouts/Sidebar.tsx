@@ -40,7 +40,6 @@ import { useAgentStore } from "../stores/agentStore";
 import sessionApi from "../pages/Chat/sessionApi";
 import { useInboxWobble } from "../hooks/useInboxWobble";
 import styles from "./index.module.less";
-import { useTheme } from "../contexts/ThemeContext";
 import { useMenuItems, useRoutes } from "../plugins/registry/hooks";
 import { Slot } from "../plugins/registry/Slot";
 import {
@@ -166,7 +165,6 @@ export default function Sidebar({
   const location = useLocation();
   const { t } = useTranslation();
   const { message } = useAppMessage();
-  const { isDark } = useTheme();
   const currentSessionId = getSessionIdFromPath(location.pathname);
   const chatPath = buildChatPath(currentSessionId);
   const [authEnabled, setAuthEnabled] = useState(false);
@@ -647,9 +645,7 @@ export default function Sidebar({
       width={siderWidth}
       className={`${styles.sider}${
         collapsed ? ` ${styles.siderCollapsed}` : ""
-      }${isDark ? ` ${styles.siderDark}` : ""}${
-        isSimpleExpanded ? ` ${styles.siderSimple}` : ""
-      }`}
+      }${isSimpleExpanded ? ` ${styles.siderSimple}` : ""}`}
     >
       {collapsed ? (
         <nav className={styles.collapsedNav}>

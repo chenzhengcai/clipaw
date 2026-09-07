@@ -2107,3 +2107,82 @@ html[data-theme="purple"].dark-mode .qwenpaw-divider,
 html[data-theme="purple"].dark-mode .ant-divider {
   border-color: rgba(167, 139, 250, 0.12);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   二十七、侧边栏 flat nav（navItem/sectionHeader/settingsSection 等）
+   源码 index.module.less 已全部回归 --app-* token（与上游 main 一致），
+   紫色差异收敛到此。选择器用 CSS Modules 编译名 index-module__xxx__。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* agentScopedSection / settingsSection — 容器卡片 */
+html[data-theme="purple"] [class*="index-module__agentScopedSection__"],
+html[data-theme="purple"] [class*="index-module__settingsSection__"] {
+  background: var(--color-bg-inset) !important;
+  border-color: var(--color-border-secondary) !important;
+}
+
+/* stickyChatButton — 文字 / hover */
+html[data-theme="purple"] [class*="index-module__stickyChatButton__"] {
+  color: var(--color-text-primary) !important;
+}
+
+html[data-theme="purple"] [class*="index-module__stickyChatButton__"]:hover {
+  background: var(--color-bg-hover) !important;
+}
+
+html[data-theme="purple"] [class*="index-module__stickyChatButton__"]:focus-visible {
+  outline-color: var(--color-primary) !important;
+}
+
+/* stickyChatButtonActive — 选中态（purple 亮/暗已分别定义 --color-primary-bg） */
+html[data-theme="purple"] [class*="index-module__stickyChatButtonActive__"],
+html[data-theme="purple"] [class*="index-module__stickyChatButtonActive__"]:hover {
+  background: var(--color-primary-bg) !important;
+  color: var(--color-primary) !important;
+}
+
+/* navItem — 扁平导航项 */
+html[data-theme="purple"] [class*="index-module__navItem__"] {
+  color: var(--color-text-primary) !important;
+}
+
+html[data-theme="purple"] [class*="index-module__navItem__"]:hover {
+  background: var(--color-bg-hover) !important;
+}
+
+html[data-theme="purple"] [class*="index-module__navItem__"]:focus-visible {
+  outline-color: var(--color-primary) !important;
+}
+
+/* navItemActive — 选中态 */
+html[data-theme="purple"] [class*="index-module__navItemActive__"] {
+  background: var(--color-primary-bg) !important;
+  color: var(--color-primary) !important;
+}
+
+/* navItemBadge — 未读圆点 */
+html[data-theme="purple"] [class*="index-module__navItemBadge__"] {
+  background: var(--color-primary) !important;
+}
+
+/* navDivider — 分隔线 */
+html[data-theme="purple"] [class*="index-module__navDivider__"] {
+  border-top-color: var(--color-border-secondary) !important;
+}
+
+/* sectionHeader — 折叠分组标题 */
+html[data-theme="purple"] [class*="index-module__sectionHeader__"] {
+  color: var(--color-text-tertiary) !important;
+}
+
+html[data-theme="purple"] [class*="index-module__sectionHeader__"]:hover {
+  color: var(--color-text-secondary) !important;
+}
+
+html[data-theme="purple"] [class*="index-module__sectionHeader__"]:focus-visible {
+  outline-color: var(--color-primary) !important;
+}
+
+/* sider 内残留的 agentSelectorContainer / collapseToggleContainer 已由
+   第二节/第十九章的同名选择器覆盖（[class*="agentSelectorContainer"] 等），
+   无需重复。 */
