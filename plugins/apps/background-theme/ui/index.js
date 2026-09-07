@@ -358,6 +358,24 @@ body.qwp-bg-global-on [class*='agentSelectorWrapper'] {
   background: transparent !important;
   border-color: transparent !important;
 }
+/* SidebarSessionList: frosted glass for the sticky header (new chat + search)
+   and the scroll area so the global background shows through the session list
+   while text stays readable. The container also gets rounded corners. */
+body.qwp-bg-global-on [class*='sidebarSessionList-module__sessionList__'] {
+  border-radius: 12px;
+  background: transparent !important;
+  margin-top: 8px;
+}
+body.qwp-bg-global-on [class*='sidebarSessionList-module__sessionListHeader__'],
+body.qwp-bg-global-on [class*='sidebarSessionList-module__scroll__'] {
+  background: rgba(255, 255, 255, 0.62) !important;
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+}
+html.dark-mode body.qwp-bg-global-on [class*='sidebarSessionList-module__sessionListHeader__'],
+html.dark-mode body.qwp-bg-global-on [class*='sidebarSessionList-module__scroll__'] {
+  background: rgba(16, 16, 20, 0.62) !important;
+}
 /* ── Global media layer ── */
 #${GLOBAL_LAYER_ID} { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
 #${GLOBAL_LAYER_ID} .qwp-bg-media { width: 100%; height: 100%; object-fit: var(--qwp-fit, cover); display: block; }
