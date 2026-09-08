@@ -230,6 +230,9 @@ html.qwp-bg-global-on body.qwp-bg-global-on [class*='index-module__siderDark__']
 html.qwp-bg-global-on body.qwp-bg-global-on .page-container { background: transparent !important; }
 html.qwp-bg-global-on body.qwp-bg-global-on .page-content { background: transparent !important; border-color: transparent !important; }
 html.qwp-bg-global-on body.qwp-bg-global-on #root { background: transparent !important; }
+/* Agent/Config footer action bar: opaque var(--app-surface) would otherwise
+   block the global background at the bottom of the config page. */
+html.qwp-bg-global-on body.qwp-bg-global-on [class*='index-module__footerActions__'] { background: transparent !important; }
 /* Chat input wrapper: solid surface removed while the plugin is on so
    the chat/global background shows through behind the input area. */
 body.qwp-bg-enabled .qwenpaw-chat-anywhere-input-wrapper,
@@ -382,6 +385,14 @@ html.dark-mode body.qwp-bg-global-on [class*='sidebarSessionList-module__scroll_
 body.qwp-bg-global-on [class*='sidebarSessionList-module__sessionListHeader__']:only-child {
   border-radius: 12px;
 }
+
+body.qwp-bg-global-on [class*='sidebarSessionList-module__stickyGroupHeader__'] {
+  border-radius: 12px;
+}
+
+
+
+
 /* ── Global media layer ── */
 #${GLOBAL_LAYER_ID} { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
 #${GLOBAL_LAYER_ID} .qwp-bg-media { width: 100%; height: 100%; object-fit: var(--qwp-fit, cover); display: block; }
