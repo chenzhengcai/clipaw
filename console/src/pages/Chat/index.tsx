@@ -1998,6 +1998,11 @@ export default function ChatPage() {
 
   const pendingClearHistoryRef = useRef(false);
   const whisperSpeechRef = useRef<WhisperSpeechButtonRef>(null);
+  const voiceBaseRef = useRef(""); // text before voice started
+  const voiceLenRef = useRef(0); // length of voice text in textarea
+  // True between onStart and the submit-time stop. Late partial/final frames
+  // that arrive after sending are ignored so the cleared input stays clean.
+  const voiceSessionActiveRef = useRef(false);
   const [whisperEnabled, setWhisperEnabled] = useState(false);
   const [whisperChecked, setWhisperChecked] = useState(false);
 
@@ -2012,18 +2017,39 @@ export default function ChatPage() {
       .finally(() => setWhisperChecked(true));
   }, []);
 
-  const handleWhisperTranscription = useCallback((text: string) => {
-    const senderContainer = document.querySelector('[class*="sender"]');
-    const textarea = senderContainer?.querySelector(
-      "textarea",
-    ) as HTMLTextAreaElement | null;
-    if (textarea) {
-      const currentValue = textarea.value || "";
-      const newValue = currentValue ? `${currentValue} ${text}` : text;
-      setTextareaValue(textarea, newValue);
+  // Track voice-inserted text to replace (not append) cumulative ASR results.
+  // Volcengine partial frames carry the full recognized-so-far text, so the
+  // voice portion of the input must be replaced, never appended.
+  const handleWhisperTranscription = useCallback(
+    (text: string, isPartial = false) => {
+      if (!voiceSessionActiveRef.current) return;
+      const senderContainer = document.querySelector('[class*="sender"]');
+      const textarea = senderContainer?.querySelector(
+        "textarea",
+      ) as HTMLTextAreaElement | null;
+      if (!textarea) return;
+
+      const current = textarea.value || "";
+
+      if (isPartial) {
+        // Replace the voice portion: keep prefix, append new voice text
+        const prefixLen = current.length - voiceLenRef.current;
+        const prefix = prefixLen > 0 ? current.slice(0, prefixLen) : "";
+        voiceLenRef.current = text.length;
+        const newValue = prefix ? `${prefix}${text}` : text;
+        setTextareaValue(textarea, newValue);
+      } else {
+        // Final: keep what was there before voice started, append final text
+        voiceLenRef.current = 0;
+        const newValue = voiceBaseRef.current
+          ? `${voiceBaseRef.current}${text}`
+          : text;
+        setTextareaValue(textarea, newValue);
+      }
       textarea.focus();
-    }
-  }, []);
+    },
+    [],
+  );
 
   useMessageHistoryNavigation(chatRef, isChatActive, isComposingRef);
   useChatInputDraft(isChatActive, selectedAgent);
@@ -2430,24 +2456,74 @@ export default function ChatPage() {
     [chatId, dispatchFilesDrawer],
   );
 
-  // Shortcut key for voice recording (Ctrl+Shift+M or Cmd+Shift+M on Mac)
+  // Voice shortcut — configurable, supports toggle and hold modes
+  const shortcutCleanupRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    const handleShortcut = (e: KeyboardEvent) => {
-      if (!isChatActive()) return;
-      // Check for Ctrl+Shift+M (Windows/Linux) or Cmd+Shift+M (Mac)
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        e.shiftKey &&
-        e.key.toLowerCase() === "m"
-      ) {
+    let cancelled = false;
+    Promise.all([
+      import(
+        "@/pages/Settings/VoiceTranscription/components/ShortcutSettings"
+      ),
+      import(
+        "@/pages/Settings/VoiceTranscription/components/VolcengineConfigCard"
+      ),
+    ]).then(([shortcutMod, voiceMod]) => {
+      if (cancelled) return;
+      const { loadShortcut, loadShortcutMode, matchShortcut } = shortcutMod;
+      const { isVoiceConnected } = voiceMod;
+
+      let shortcut = loadShortcut();
+      let mode = loadShortcutMode();
+      let holdActive = false;
+
+      const onStorage = () => {
+        shortcut = loadShortcut();
+        mode = loadShortcutMode();
+      };
+      window.addEventListener("storage", onStorage);
+
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (!isChatActive() && !location.pathname.startsWith("/coding"))
+          return;
+        if (!whisperEnabled) return;
+        if (!isVoiceConnected()) return;
+        if (!matchShortcut(e, shortcut)) return;
+
         e.preventDefault();
-        if (whisperEnabled) {
+        if (mode === "hold") {
+          if (!whisperSpeechRef.current?.isRecording()) {
+            whisperSpeechRef.current?.toggleRecording();
+            holdActive = true;
+          }
+        } else {
           whisperSpeechRef.current?.toggleRecording();
         }
-      }
+      };
+
+      const onKeyUp = (e: KeyboardEvent) => {
+        if (mode !== "hold" || !holdActive) return;
+        if (!matchShortcut(e, shortcut)) return;
+        e.preventDefault();
+        if (whisperSpeechRef.current?.isRecording()) {
+          whisperSpeechRef.current?.toggleRecording();
+        }
+        holdActive = false;
+      };
+
+      document.addEventListener("keydown", onKeyDown);
+      document.addEventListener("keyup", onKeyUp);
+
+      shortcutCleanupRef.current = () => {
+        document.removeEventListener("keydown", onKeyDown);
+        document.removeEventListener("keyup", onKeyUp);
+        window.removeEventListener("storage", onStorage);
+      };
+    });
+
+    return () => {
+      cancelled = true;
+      shortcutCleanupRef.current?.();
     };
-    document.addEventListener("keydown", handleShortcut);
-    return () => document.removeEventListener("keydown", handleShortcut);
   }, [isChatActive, whisperEnabled]);
   chatIdRef.current = chatId;
   navigateRef.current = navigate;
@@ -3206,6 +3282,15 @@ export default function ChatPage() {
         if (textarea) setTextareaValue(textarea, "");
         // Clear sender attachment preview (deferred to next tick)
         clearSenderAttachments();
+        // Stop voice recording if active
+        if (whisperSpeechRef.current?.isRecording()) {
+          whisperSpeechRef.current?.toggleRecording();
+        }
+        whisperSpeechRef.current?.resetSession();
+        // Clear voice tracking refs
+        voiceBaseRef.current = "";
+        voiceLenRef.current = 0;
+        voiceSessionActiveRef.current = false;
         return false;
       }
       const snapshotIsCurrent =
@@ -3229,6 +3314,17 @@ export default function ChatPage() {
           setTextareaValue(textarea, prepared);
         }
       }
+
+      // Stop voice recording if active
+      if (whisperSpeechRef.current?.isRecording()) {
+        whisperSpeechRef.current?.toggleRecording();
+      }
+      // Reset voice ASR session so new speech starts fresh after send
+      whisperSpeechRef.current?.resetSession();
+      // Clear voice tracking refs so next voice input starts clean
+      voiceBaseRef.current = "";
+      voiceLenRef.current = 0;
+      voiceSessionActiveRef.current = false;
 
       return { proceed: true, query: prepared };
     };
@@ -3501,6 +3597,15 @@ export default function ChatPage() {
               <WhisperSpeechButton
                 ref={whisperSpeechRef}
                 onTranscription={handleWhisperTranscription}
+                onStart={() => {
+                  // Capture current textarea value as the base text
+                  const textarea = document
+                    .querySelector('[class*="sender"]')
+                    ?.querySelector("textarea") as HTMLTextAreaElement | null;
+                  voiceBaseRef.current = textarea?.value || "";
+                  voiceLenRef.current = 0;
+                  voiceSessionActiveRef.current = true;
+                }}
               />
             ) : null}
             {usesQwenPawBackend && (
