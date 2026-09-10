@@ -30,7 +30,7 @@ export function lineChartChrome({
     autoFit: true,
     height: 300,
     theme: isDark ? "dark" : "light",
-    style: { lineWidth: 3, fillOpacity: 0 },
+    style: { lineWidth: 3, fillOpacity: 0, shape: "smooth" },
     tooltip: {
       title: "date",
       items: [

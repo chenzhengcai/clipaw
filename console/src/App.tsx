@@ -355,6 +355,18 @@ function AppInner({ backendInfo }: { backendInfo: BackendInfo }) {
     useUploadLimitStore.getState().fetch();
   }, []);
 
+  // Restore client config persisted on the backend (voice shortcut + mode,
+  // last-used agent, voice connectivity) into localStorage. The Tauri app
+  // may restart on a different port, which changes the origin and wipes
+  // localStorage — the backend copy is the cross-restart source of truth.
+  useEffect(() => {
+    import("./api/clientConfig")
+      .then((m) => m.loadClientConfig())
+      .catch(() => {
+        // backend not reachable yet — settings page re-saves on change
+      });
+  }, []);
+
   useEffect(() => {
     const handleLanguageChanged = (lng: string) => {
       const shortLng = lng.split("-")[0];
