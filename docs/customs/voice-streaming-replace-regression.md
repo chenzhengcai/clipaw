@@ -25,9 +25,20 @@
 
 证据：`git log --all -S "voiceBaseRef"` → 只命中 `d6797401`（老分支），clipaw2.x 历史零命中。
 
-## 3. 修复内容（`console/src/pages/Chat/index.tsx`，4 处）
+## 3. 修复内容
 
-从 `d6797401:console/src/pages/Chat/index.tsx` 移植 + 一处增强：
+### 3.0 结构（2026-09-11 按"最小冲突面"原则重构）
+
+按 fork 补丁铁律（README.md 维护原则第 1 条），主体逻辑抽到 **fork 专属新文件**，上游热文件只留挂载点：
+
+| 文件 | 角色 | 冲突风险 |
+|---|---|---|
+| `console/src/pages/Chat/voice/useVoiceChatInput.ts` | **新增，fork 专属**：whisperEnabled 探测、替换式转写（voiceBaseRef/voiceLenRef/voiceSessionActiveRef）、voiceOnStart、stopVoiceOnSubmit、可配置快捷键 effect（toggle/hold） | 无（上游无此文件） |
+| `console/src/pages/Chat/index.tsx` | 挂载点：import + 解构 hook 返回值 + WhisperSpeechButton 三 props + handleBeforeSubmit 两条路径各一行 `stopVoiceOnSubmit()` | 低（~19 行增量，比内联版 129 行缩 6.8 倍） |
+
+hook 返回：`whisperSpeechRef / whisperEnabled / whisperChecked / handleWhisperTranscription / voiceOnStart / stopVoiceOnSubmit`。
+
+### 3.1 逻辑（自 d6797401 移植 + 一处增强）
 
 1. **恢复 `voiceBaseRef`/`voiceLenRef` + 替换式 `handleWhisperTranscription(text, isPartial)`** — partial 保留前缀替换语音段；final 用 base 前缀拼接，`voiceLenRef` 归零
 2. **恢复可配置快捷键 effect** — 动态 import `ShortcutSettings` 的 `loadShortcut/loadShortcutMode/matchShortcut` + `VolcengineConfigCard.isVoiceConnected`；支持 toggle/hold；storage 事件热更新；作用域 chat + `/coding`
