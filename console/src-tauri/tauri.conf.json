@@ -74,7 +74,8 @@
           "Indonesian": "nsis-languages/Indonesian.nsh",
           "Japanese": "nsis-languages/Japanese.nsh",
           "Russian": "nsis-languages/Russian.nsh",
-          "PortugueseBR": "nsis-languages/PortugueseBR.nsh"
+          "PortugueseBR": "nsis-languages/PortugueseBR.nsh",
+          "Vietnamese": "nsis-languages/Vietnamese.nsh"
         },
         "compression": "zlib",
         "displayLanguageSelector": false
