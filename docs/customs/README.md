@@ -8,7 +8,7 @@
 
 | 文档 | 内容 | 创建日期 | 最新更新 |
 |------|------|---------|---------|
-| [purple-theme.md](./purple-theme.md) | 紫色主题插件化实现 — 三层覆盖架构、改动清单、冲突分析、变更历史 | 2026-06-18 | 2026-06-20 |
+| [purple-theme.md](./purple-theme.md) | 紫色主题三层覆盖架构 — 含 2026-09-11 --app-* token 接管与硬编码橙残留补丁 | 2026-06-18 | 2026-09-11 |
 | [voice-transcription.md](./voice-transcription.md) | 语音转写功能 — 三种 ASR 后端架构、WebSocket 流式设计、前端组件树 | 2026-06-19 | 2026-06-19 |
 | [token-usage-chart-smooth.md](./token-usage-chart-smooth.md) | Token 消耗折线图圆滑曲线修复 — @ant-design/plots v2 API 迁移适配 | 2026-06-19 | 2026-06-19 |
 | [tauri-desktop-build.md](./tauri-desktop-build.md) | Tauri 桌面端打包 — 麦克风权限修复、PyInstaller 脚本修复、GitHub Actions 精简 | 2026-06-19 | 2026-06-19 |
