@@ -90,6 +90,12 @@ def _validate_tar_members(tar: tarfile.TarFile, workdir: Path) -> None:
             ) from None
 
 
+def _prune_runtime(dest: Path) -> None:
+    # C headers only matter when compiling native addons, which the bundled
+    # runtime never does; they add ~64MB to the installer payload.
+    shutil.rmtree(dest / "include", ignore_errors=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dest", required=True)
@@ -111,6 +117,7 @@ def main() -> None:
         and marker.is_file()
         and marker.read_text(encoding="utf-8").strip() == f"{version}-{target}"
     ):
+        _prune_runtime(dest)
         print(f"node-runtime already staged ({version}-{target}); skipping")
         return
 
@@ -130,6 +137,8 @@ def main() -> None:
         dest.mkdir(parents=True, exist_ok=True)
         for item in extracted.iterdir():
             shutil.move(str(item), dest / item.name)
+
+    _prune_runtime(dest)
 
     if not _node_exe(dest).is_file() or not _npx_exe(dest).is_file():
         raise SystemExit("staging failed: node or npx missing")
