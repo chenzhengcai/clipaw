@@ -67,6 +67,7 @@
     "reload": "Tải lại"
   },
   "portabilityImport": {
+    "qwenpawOnly": "Chỉ các tác tử sử dụng backend QwenPaw mới có thể nhập dữ liệu. Hãy chọn tác tử QwenPaw để tiếp tục.",
     "title": "Nhập dữ liệu",
     "description": "Chuyển cuộc trò chuyện và thiết lập công cụ từ ứng dụng AI khác vào QwenPaw.",
     "steps": {
@@ -960,6 +961,9 @@
     "detailHeartbeatTitle": "Heartbeat",
     "messageNotFound": "Không tìm thấy tin nhắn",
     "detailTaskName": "Tên tác vụ",
+    "viewSession": "Xem phiên",
+    "sessionNotFound": "Không tìm thấy phiên liên quan. Phiên có thể đã bị xóa hoặc chưa được lưu.",
+    "openSessionFailed": "Không thể mở phiên. Vui lòng thử lại.",
     "detailTaskId": "ID tác vụ",
     "detailStatus": "Trạng thái",
     "detailSeverity": "Mức độ",
@@ -2586,6 +2590,11 @@
     "localModelsNotice": "File sao lưu không bao gồm file mô hình cục bộ. Khi di chuyển sang thiết bị khác, bạn cần tải lại các mô hình đó."
   },
   "skills": {
+    "allChannels": "Tất cả kênh",
+    "allChannelsHint": "“Tất cả kênh” bao gồm các kênh được kết nối trong tương lai.",
+    "selectChannels": "Chọn ít nhất một kênh hoặc tất cả kênh",
+    "channelUnavailable": "Hiện không khả dụng",
+    "channelsLoadFailed": "Không thể tải các kênh.",
     "title": "Kỹ năng",
     "description": "Quản lý kỹ năng và khả năng của agent.",
     "preload": "Tải trước",

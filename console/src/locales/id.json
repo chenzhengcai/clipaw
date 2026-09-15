@@ -67,6 +67,7 @@
     "reload": "Muat ulang"
   },
   "portabilityImport": {
+    "qwenpawOnly": "Impor hanya tersedia untuk agen yang menggunakan backend QwenPaw. Pilih agen QwenPaw untuk melanjutkan.",
     "title": "Impor",
     "description": "Pindahkan percakapan dan pengaturan alat dari aplikasi AI lain ke QwenPaw.",
     "steps": {
@@ -1222,7 +1223,11 @@
     "uploadZip": "Unggah via ZIP",
     "downloadFromPool": "Muat dari Kumpulan Skill",
     "channels": "Saluran",
-    "allChannels": "Semua",
+    "allChannels": "Semua kanal",
+    "allChannelsHint": "“Semua kanal” mencakup kanal yang terhubung di masa mendatang.",
+    "selectChannels": "Pilih setidaknya satu kanal atau semua kanal",
+    "channelUnavailable": "Saat ini tidak tersedia",
+    "channelsLoadFailed": "Gagal memuat kanal.",
     "lastUpdated": "Diperbarui",
     "searchPlaceholder": "Filter berdasarkan nama",
     "listView": "Tampilan daftar",
@@ -2101,6 +2106,9 @@
     "detailHeartbeatTitle": "Heartbeat",
     "messageNotFound": "Pesan tidak ditemukan",
     "detailTaskName": "Nama Tugas",
+    "viewSession": "Lihat sesi",
+    "sessionNotFound": "Sesi terkait tidak ditemukan. Sesi mungkin telah dihapus atau belum disimpan.",
+    "openSessionFailed": "Gagal membuka sesi. Silakan coba lagi.",
     "detailTaskId": "ID Tugas",
     "detailStatus": "Status",
     "detailSeverity": "Tingkat Keparahan",

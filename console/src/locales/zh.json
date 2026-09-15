@@ -119,6 +119,7 @@
     "cliAuthenticated": "{{type}} CLI 已认证"
   },
   "portabilityImport": {
+    "qwenpawOnly": "导入仅适用于使用 QwenPaw 原生后端的智能体。请选择 QwenPaw 智能体后继续。",
     "title": "导入",
     "description": "将其他 AI 应用中的聊天记录、工具和设置迁移到 QwenPaw，并自动完成兼容性修复。",
     "steps": {
@@ -492,6 +493,9 @@
     "detailHeartbeatTitle": "心跳",
     "messageNotFound": "未找到该消息",
     "detailTaskName": "任务名称",
+    "viewSession": "查看会话",
+    "sessionNotFound": "未找到关联会话，会话可能已删除或未保存",
+    "openSessionFailed": "打开会话失败，请稍后重试",
     "detailTaskId": "任务 ID",
     "detailStatus": "执行状态",
     "detailSeverity": "严重程度",
@@ -1071,7 +1075,11 @@
     "zipOnly": "仅支持上传 .zip 文件",
     "fileSizeExceeded": "文件大小超过 {{limit}}MB 限制。当前文件：{{size}}MB",
     "channels": "适用频道",
-    "allChannels": "所有",
+    "allChannels": "全部渠道",
+    "allChannelsHint": "“全部渠道”包含以后接入的渠道。",
+    "selectChannels": "请选择至少一个渠道或全部渠道",
+    "channelUnavailable": "当前不可用",
+    "channelsLoadFailed": "渠道加载失败。",
     "lastUpdated": "更新时间",
     "searchPlaceholder": "按名称筛选",
     "listView": "列表视图",
@@ -1408,6 +1416,10 @@
     "runNowFailed": "触发心跳执行失败"
   },
   "cronJobs": {
+    "executionModel": "执行模型",
+    "executionModelDefault": "默认",
+    "executionModelTooltip": "默认使用所属 Agent 执行时的默认模型。指定模型仅影响当前任务。",
+    "executionModelsLoadFailed": "模型列表加载失败，已保存的选择保持不变。",
     "title": "定时任务",
     "description": "创建和管理在指定时间自动执行的定时任务。",
     "createJob": "创建任务",
@@ -1542,8 +1554,11 @@
     "timezoneTooltip": "Cron 计划使用的时区。默认：UTC",
     "taskTypeTooltip": "选择 'text' 用于简单消息任务，选择 'agent' 用于复杂的智能体工作流。",
     "textTooltip": "简单消息任务：此处为实际的消息正文，任务类型为'text'时必填。",
-    "requestInputTooltip": "JSON 格式的消息内容。这是智能体将接收和处理的内容，任务类型为'agent'时必填。",
-    "requestInputExample": "格式：[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"您的消息内容\"}]}]",
+    "jsonMode": "JSON 模式",
+    "textMode": "文本模式",
+    "requestTextExample": "您的消息内容",
+    "requestTextPlaceholder": "请输入希望智能体执行的任务，例如：杭州今天天气如何？",
+    "requestInputTooltip": "填写希望智能体执行的任务，也可以切换到 JSON 模式编辑完整消息。",
     "requestSessionIdTooltip": "请求上下文的会话ID。不确定时使用 'default'。",
     "requestUserIdTooltip": "发起请求的用户ID。自动化任务使用 'system'。",
     "dispatchChannelTooltip": "响应将发送到的目标频道（例如：'console'、'discord'、'imessage'）。",
@@ -2569,6 +2584,7 @@
     "closeWorkspace": "关闭工作区",
     "artifactCreated": "已新增",
     "artifactModified": "已修改",
+    "artifactSent": "已发送",
     "artifactsExpand": "展开其余 {{count}} 个文件",
     "artifactsCollapse": "收起文件"
   },
