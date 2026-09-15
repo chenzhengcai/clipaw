@@ -103,8 +103,10 @@ jobs:
         with:
           workspaces: console/src-tauri
 
-      - name: Install NSIS
+      - name: Install NSIS (amd64)
         uses: negrutiu/nsis-install@v2
+        with:
+          arch: amd64
 
       - name: Clean dist directory
         shell: pwsh

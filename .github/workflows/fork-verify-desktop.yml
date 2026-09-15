@@ -140,8 +140,10 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install NSIS
+      - name: Install NSIS (amd64)
         uses: negrutiu/nsis-install@v2
+        with:
+          arch: amd64
 
       - name: Build Tauri Windows package
         shell: pwsh
