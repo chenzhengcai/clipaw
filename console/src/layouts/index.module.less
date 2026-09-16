@@ -282,7 +282,7 @@
 }
 
 .siderDark {
-  background: #1a1a1a !important;
+  background: var(--app-shell-bg) !important;
   border-right-color: rgba(255, 255, 255, 0.08) !important;
 
   // Agent-scoped section (dark mode)
@@ -293,17 +293,17 @@
 
   // Sticky container background (dark mode)
   .agentSelectorContainer {
-    background: #1e1e1e;
+    background: var(--app-surface-subtle);
   }
 
   // Sticky bottom bar background (dark mode)
   .collapseToggleContainer {
-    background: #1a1a1a;
+    background: var(--app-shell-bg);
   }
 
   :global {
     .qwenpaw-menu {
-      background: #1a1a1a !important;
+      background: var(--app-shell-bg) !important;
       border-inline-end: 0 !important;
     }
 
@@ -331,8 +331,12 @@
 
     /* Selected item */
     .qwenpaw-menu-item-selected {
-      background: rgba(255, 127, 22, 0.5) !important;
-      color: #ff7f16 !important;
+      background: color-mix(
+        in srgb,
+        var(--app-accent) 50%,
+        transparent
+      ) !important;
+      color: var(--app-accent-text) !important;
     }
   }
 }
@@ -387,8 +391,8 @@
   color: rgba(26, 23, 22, 0.52) !important;
 
   &:hover {
-    color: #ff7f16 !important;
-    background: rgba(255, 127, 22, 0.08) !important;
+    color: var(--app-accent) !important;
+    background: var(--app-accent-faint) !important;
   }
 }
 
@@ -396,7 +400,7 @@
 .appBrandReadyIcon,
 .appBrandFailedIcon {
   font-size: 13px;
-  color: #ff7f16;
+  color: var(--app-accent);
 }
 
 .appBrandFailedIcon {
@@ -638,7 +642,7 @@
 
   &:hover {
     background: rgba(0, 0, 0, 0.06) !important;
-    color: #ff7f16 !important;
+    color: var(--app-accent) !important;
   }
 }
 
@@ -740,8 +744,8 @@
 }
 
 .collapsedAgentOptionActive {
-  color: #ff7f16;
-  background: rgba(255, 127, 22, 0.1);
+  color: var(--app-accent-text);
+  background: var(--app-accent-soft);
 }
 
 // ─── Expanded sidebar: flat nav + session list ────────────────────────────────
@@ -842,15 +846,15 @@
   margin: 4px 0 2px;
   border: none;
   border-radius: 8px;
-  background: rgba(255, 127, 22, 0.08);
-  color: #ff7f16;
+  background: var(--app-accent-soft);
+  color: var(--app-accent-text);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.2s;
 
   &:hover {
-    background: rgba(255, 127, 22, 0.14);
+    background: var(--app-accent-soft-hover);
   }
 }
 
@@ -1081,7 +1085,7 @@
   font-weight: 500;
   line-height: 64.78px;
   letter-spacing: normal;
-  color: #ff7f16;
+  color: var(--app-accent);
 }
 
 .updateModalBody {
@@ -1100,13 +1104,13 @@
 }
 
 .updateViewReleasesBtn {
-  background: #ff7f16 !important;
-  border-color: #ff7f16 !important;
+  background: var(--app-accent) !important;
+  border-color: var(--app-accent) !important;
   color: #fff !important;
 
   &:hover {
-    background: #d45b0a !important;
-    border-color: #d45b0a !important;
+    background: var(--app-accent-hover) !important;
+    border-color: var(--app-accent-hover) !important;
   }
 }
 
@@ -1163,7 +1167,7 @@
 /* ─── Dark mode overrides ─────────────────────────────────────────────────── */
 :global(.dark-mode) {
   .header {
-    background: #1a1a1a !important;
+    background: var(--app-shell-bg) !important;
     border-bottom-color: rgba(255, 255, 255, 0.08) !important;
     color: rgba(255, 255, 255, 0.85);
 
@@ -1190,7 +1194,7 @@
   }
 
   .sider {
-    background: #1a1a1a !important;
+    background: var(--app-shell-bg) !important;
     border-right-color: rgba(255, 255, 255, 0.08) !important;
   }
 
@@ -1199,7 +1203,7 @@
     :global(.ant-popover-inner),
     :global(.qwenpaw-popover-inner) {
       border-color: rgba(255, 255, 255, 0.1);
-      background: #1a1a1a !important;
+      background: var(--app-surface) !important;
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
     }
   }
@@ -1218,20 +1222,20 @@
   }
 
   .collapsedAgentOptionActive {
-    color: #ff7f16;
-    background: rgba(255, 127, 22, 0.14);
+    color: var(--app-accent-text);
+    background: var(--app-accent-soft);
   }
 
   .versionBadge {
-    color: #ff7f16;
+    color: var(--app-accent-text);
   }
 
   .brandCollapseToggle {
     color: rgba(255, 255, 255, 0.58) !important;
 
     &:hover {
-      color: #ff9d4d !important;
-      background: rgba(255, 127, 22, 0.12) !important;
+      color: var(--app-accent-hover) !important;
+      background: var(--app-accent-soft) !important;
     }
   }
 
@@ -1276,7 +1280,7 @@
 
     &:hover {
       background: rgba(255, 255, 255, 0.08);
-      color: #ff7f16;
+      color: var(--app-accent);
     }
   }
 
@@ -1306,17 +1310,21 @@
   }
 
   .collapsedNavItemActive {
-    background: rgba(255, 127, 22, 0.5) !important;
+    background: color-mix(
+      in srgb,
+      var(--app-accent) 50%,
+      transparent
+    ) !important;
     color: rgba(255, 255, 255, 0.88) !important;
   }
 
   .codeBlock {
-    background: #2a2a2a;
+    background: var(--app-surface-raised);
     border-color: rgba(255, 255, 255, 0.1);
   }
 
   .codeInline {
-    background: #2a2a2a;
+    background: var(--app-surface-raised);
     color: rgba(255, 255, 255, 0.85);
   }
 
@@ -1338,11 +1346,11 @@
     }
 
     .newTask {
-      background: rgba(255, 127, 22, 0.12);
-      color: #ff7f16;
+      background: var(--app-accent-soft);
+      color: var(--app-accent-text);
 
       &:hover {
-        background: rgba(255, 127, 22, 0.2);
+        background: var(--app-accent-soft-hover);
       }
     }
 
@@ -1366,8 +1374,8 @@
     }
 
     .navigationItemActive {
-      background: rgba(255, 127, 22, 0.5);
-      color: #ff7f16;
+      background: color-mix(in srgb, var(--app-accent) 50%, transparent);
+      color: var(--app-accent-text);
     }
   }
 }

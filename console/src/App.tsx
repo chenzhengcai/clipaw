@@ -5,7 +5,7 @@ import {
   bailianTheme,
 } from "@agentscope-ai/design";
 import { App as AntdApp, theme as antdTheme } from "antd";
-import type { ThemeConfig } from "antd";
+import type { ThemeConfig as AntThemeConfig } from "antd";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -57,6 +57,8 @@ import { hubApi, type HubHealth } from "./api/modules/hub";
 import { isTauri } from "@tauri-apps/api/core";
 import { isDesktopTauriRuntime } from "./utils/openExternalLink";
 import { interceptBlankLinkClicks } from "./utils/interceptBlankLinkClicks";
+import { isSafeCssColor } from "./utils/chatThemeColor";
+import type { ThemeConfig } from "./api/modules/theme";
 import "./styles/tokens.css";
 import "./styles/layout.css";
 import "./styles/form-override.css";
@@ -70,6 +72,21 @@ const antdLocaleMap: Record<string, Locale> = {
   ru: ruRU,
   id: idID,
 };
+
+export function getAppThemeToken(
+  userTheme: ThemeConfig,
+  isDark: boolean,
+): NonNullable<AntThemeConfig["token"]> {
+  return {
+    colorPrimary:
+      userTheme.dark?.accent && isDark
+        ? userTheme.dark.accent
+        : userTheme.accent ?? "#FF7F16",
+    ...(userTheme.radius
+      ? { borderRadius: Number.parseFloat(userTheme.radius) }
+      : {}),
+  };
+}
 
 const dayjsLocaleMap: Record<string, string> = {
   zh: "zh-cn",
@@ -312,7 +329,7 @@ function AppInner({ backendInfo }: { backendInfo: BackendInfo }) {
   const hubMode = backendInfo.mode === "hub";
   const basename = getRouterBasename(window.location.pathname);
   const { i18n } = useTranslation();
-  const { isDark } = useTheme();
+  const { isDark, previewTheme: userTheme } = useTheme();
   // Color scheme (配色): resolve the active theme override from the store
   // maintained by the sidebar settings panel. Null = default orange scheme.
   const activeThemeId = useThemeStore((s) => s.activeThemeId);
@@ -366,6 +383,32 @@ function AppInner({ backendInfo }: { backendInfo: BackendInfo }) {
         // backend not reachable yet — settings page re-saves on change
       });
   }, []);
+
+  useEffect(() => {
+    const darkTheme = isDark ? userTheme.dark : undefined;
+    const accent = darkTheme?.accent ?? userTheme.accent;
+    const accentHover = userTheme.accent_hover;
+    const accentBg = darkTheme?.accent_bg ?? userTheme.accent_bg;
+    const root = document.documentElement;
+    const setOrRemove = (
+      name: string,
+      value: string | undefined,
+      validateColor = false,
+    ) => {
+      if (value === undefined) {
+        root.style.removeProperty(name);
+      } else if (!validateColor || isSafeCssColor(value)) {
+        root.style.setProperty(name, value);
+      }
+    };
+
+    setOrRemove("--app-accent", accent);
+    setOrRemove("--app-accent-hover", accentHover);
+    setOrRemove("--app-accent-soft", accentBg, true);
+    setOrRemove("--app-surface", darkTheme?.surface, true);
+    setOrRemove("--app-radius", userTheme.radius);
+    setOrRemove("--border-radius", userTheme.radius);
+  }, [isDark, userTheme]);
 
   useEffect(() => {
     const handleLanguageChanged = (lng: string) => {
@@ -462,20 +505,21 @@ function AppInner({ backendInfo }: { backendInfo: BackendInfo }) {
         prefixCls="qwenpaw"
         locale={antdLocale}
         theme={{
-          ...(selectedTheme as { theme?: ThemeConfig }).theme,
+          ...(selectedTheme as { theme?: AntThemeConfig }).theme,
           algorithm: isDark
             ? antdTheme.darkAlgorithm
             : antdTheme.defaultAlgorithm,
           token: {
-            colorPrimary: "#FF7F16",
-            // Active color-scheme tokens (purple etc.) override the default
-            // orange primary + background colors.
+            // User-customizable accent/radius tokens (defaulting to the
+            // orange primary); the active color scheme (purple etc.)
+            // overrides the primary + background colors.
+            ...getAppThemeToken(userTheme, isDark),
             ...(isDark ? currentTheme?.darkTokens : currentTheme?.lightTokens),
           },
           ...(currentTheme
             ? {
                 components: {
-                  ...((selectedTheme as { theme?: ThemeConfig }).theme
+                  ...((selectedTheme as { theme?: AntThemeConfig }).theme
                     ?.components),
                   ...(isDark
                     ? currentTheme.darkComponents
