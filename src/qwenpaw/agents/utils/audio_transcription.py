@@ -22,6 +22,7 @@ import tempfile
 import threading
 import uuid as _uuid
 from typing import Awaitable, Callable, List, Optional, Tuple
+from ...utils.io_utils import run_sync_io
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,7 @@ async def _transcribe_whisper_api(file_path: str) -> Optional[str]:
     Only uses the explicitly configured provider — no auto-detection.
     Returns the transcribed text, or ``None`` on failure.
     """
-    creds = _get_configured_provider_creds()
+    creds = await run_sync_io(_get_configured_provider_creds)
     if creds is None:
         logger.warning(
             "No transcription provider configured; skipping transcription",
