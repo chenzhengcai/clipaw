@@ -147,13 +147,21 @@ def main() -> int:
             [
                 conda,
                 "run",
+                "--no-capture-output",
                 "-n",
                 env_name,
                 "python",
                 "-m",
                 "pip",
                 "install",
-                f"qwenpaw[full] @ {wheel_uri}",
+                "--progress-bar",
+                "on",
+                # Install qwenpaw with dependencies, but WITHOUT the
+                # `whisper` extra: it pulls in torch (~2GB+) via
+                # openai-whisper, which makes the build huge and slow and is
+                # only needed for local audio transcription. Use [full] if
+                # you need local Whisper speech-to-text.
+                f"qwenpaw[qwenpaw-data,hub,local,codex,qoder] @ {wheel_uri}",
             ],
             env=install_env,
         )
@@ -162,6 +170,7 @@ def main() -> int:
             [
                 conda,
                 "run",
+                "--no-capture-output",
                 "-n",
                 env_name,
                 "python",
@@ -181,6 +190,7 @@ def main() -> int:
                 [
                     conda,
                     "run",
+                    "--no-capture-output",
                     "-n",
                     env_name,
                     "python",
