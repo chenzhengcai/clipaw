@@ -324,9 +324,6 @@
     "settings": {
       "language": "Language",
       "theme": "Theme",
-      "colorScheme": "Color Scheme",
-      "colorSchemeDefault": "Default",
-      "colorSchemePurple": "Purple",
       "desktopMode": "Desktop Mode"
     },
     "quickMenu": {

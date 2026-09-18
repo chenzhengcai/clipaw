@@ -324,9 +324,6 @@
     "settings": {
       "language": "语言",
       "theme": "主题",
-      "colorScheme": "配色",
-      "colorSchemeDefault": "默认",
-      "colorSchemePurple": "紫色",
       "desktopMode": "桌面模式"
     },
     "quickMenu": {

@@ -306,9 +306,6 @@
     "settings": {
       "language": "Ngôn ngữ",
       "theme": "Giao diện",
-      "colorScheme": "Bảng màu",
-      "colorSchemeDefault": "Mặc định",
-      "colorSchemePurple": "Tím",
       "desktopMode": "Chế độ Màn hình nền"
     },
     "quickMenu": {

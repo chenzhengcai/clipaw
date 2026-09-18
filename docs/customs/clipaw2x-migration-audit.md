@@ -5,14 +5,14 @@
 | 审计日期 | 2026-09-10 |
 | 对比基线 | clipaw2.0.0 分支（`d6797401`）+ docs/customs/ 全部 10 篇档案 |
 | 审计方式 | 逐档案核对"改动清单"标记（符号/文件/端点）在 clipaw2.x 的存活状态 |
-| 结论 | 10 项定制存活；**2 项回归**（本次已修复）；1 项有意弃用 |
+| 结论 | 8 项定制存活（紫色主题相关 2 项已于 2026-09-19 移除）；**2 项回归**（本次已修复）；1 项有意弃用 |
 
 ## 1. 核对结果总表
 
 | # | 定制项 | 核对标记 | 状态 |
 |---|--------|---------|------|
-| 1 | 紫色主题三层覆盖 | `themes/purple/{theme.ts,tokens.css,overrides.css}`、`stores/themeStore.ts`、App.tsx `data-theme` 动态设置 | ✅ 完好 |
-| 2 | 主题切换入口 | 老方案=PluginManager 内置主题插件；现方案=`SidebarSettingsPanel`（activeThemeId + themeMode） | ✅ 有意迁移（见 §3） |
+| 1 | 紫色主题三层覆盖 | `themes/purple/{theme.ts,tokens.css,overrides.css}`、`stores/themeStore.ts`、App.tsx `data-theme` 动态设置 | ❌ 已移除（2026-09-19 完全删除，回归官方主题机制） |
+| 2 | 主题切换入口 | 老方案=PluginManager 内置主题插件；现方案=`SidebarSettingsPanel`（activeThemeId + themeMode） | ❌ 已移除（2026-09-19 与紫色主题一并删除，保留官方亮/暗/系统切换） |
 | 3 | 侧边栏 | 老方案=自定义 SectionHeader/collapsedSections；现方案=回归上游 token 体系 | ✅ 有意弃用（`91afbf02`）；wobble 抖动保留（`useInboxWobble.ts` + Sidebar 4 处引用） |
 | 4 | Agent 选择持久化 | `agent.ts setActiveAgent`、`agentStore` 双写、后端 `PUT /agents/active`（routers/agents.py:547） | ✅ 完好 |
 | 5 | 模型隐藏/显示 | RemoteModelManageModal `handleToggleModelVisibility`/EyeOff、`modelSelectorModels` hidden 过滤、zh/en locales keys | ✅ 完好 |
@@ -43,9 +43,9 @@
 | 老方案（clipaw2.0.0） | 现方案（clipaw2.x） | 依据 |
 |---|---|---|
 | Sidebar 自定义 SectionHeader 折叠导航 | 上游 Menu + 语义 token | 用户自有提交 `91afbf02`"侧边栏样式回归上游 token 体系，紫色差异收敛至 themes/purple" |
-| PluginManager 注入内置主题插件（Switch 切换） | SidebarSettingsPanel 主题切换（themeMode + activeThemeId） | 同上重构；`themes/index.ts` 注释仍提"插件管理页面可启用"——注释已过时 |
+| PluginManager 注入内置主题插件（Switch 切换） | SidebarSettingsPanel 官方主题切换（themeMode 亮/暗/系统）；配色切换（activeThemeId）已于 2026-09-19 随紫色主题一并删除 | 同上重构 |
 
-> purple-theme.md 的"改动文件清单/变更历史"停在 2026-06-20，早于 91afbf02 重构，阅读时以 §3 为准。
+> 紫色主题相关档案 purple-theme.md 已随 2026-09-19 的移除一并删除。
 
 ## 4. 验证
 

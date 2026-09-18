@@ -67,8 +67,6 @@ import type { ThemeConfig } from "./api/modules/theme";
 import "./styles/tokens.css";
 import "./styles/layout.css";
 import "./styles/form-override.css";
-import { availableThemes } from "./themes";
-import { useThemeStore, resolveActiveTheme } from "./stores/themeStore";
 
 const antdLocaleMap: Record<string, Locale> = {
   zh: zhCN,
@@ -335,26 +333,8 @@ function AppInner({ backendInfo }: { backendInfo: BackendInfo }) {
   const basename = getRouterBasename(window.location.pathname);
   const { i18n } = useTranslation();
   const { isDark, previewTheme: userTheme } = useTheme();
-  // Color scheme (配色): resolve the active theme override from the store
-  // maintained by the sidebar settings panel. Null = default orange scheme.
-  const activeThemeId = useThemeStore((s) => s.activeThemeId);
-  const currentTheme = resolveActiveTheme(availableThemes, activeThemeId);
   const selectedTheme = isDark ? bailianDarkTheme : bailianTheme;
 
-  // Dynamically set/remove html[data-theme] so the scheme's CSS variable
-  // overrides and component CSS overrides (all scoped under
-  // html[data-theme="..."]) activate/deactivate with the store.
-  useEffect(() => {
-    const htmlEl = document.documentElement;
-    if (currentTheme) {
-      htmlEl.setAttribute("data-theme", currentTheme.id);
-    } else {
-      htmlEl.removeAttribute("data-theme");
-    }
-    return () => {
-      htmlEl.removeAttribute("data-theme");
-    };
-  }, [currentTheme]);
   const lang = i18n.resolvedLanguage || i18n.language || "en";
   const [antdLocale, setAntdLocale] = useState<Locale>(
     antdLocaleMap[lang] ?? enUS,
@@ -520,23 +500,8 @@ function AppInner({ backendInfo }: { backendInfo: BackendInfo }) {
             ? antdTheme.darkAlgorithm
             : antdTheme.defaultAlgorithm,
           token: {
-            // User-customizable accent/radius tokens (defaulting to the
-            // orange primary); the active color scheme (purple etc.)
-            // overrides the primary + background colors.
             ...getAppThemeToken(userTheme, isDark),
-            ...(isDark ? currentTheme?.darkTokens : currentTheme?.lightTokens),
           },
-          ...(currentTheme
-            ? {
-                components: {
-                  ...((selectedTheme as { theme?: AntThemeConfig }).theme
-                    ?.components),
-                  ...(isDark
-                    ? currentTheme.darkComponents
-                    : currentTheme.lightComponents),
-                },
-              }
-            : {}),
         }}
       >
         <AntdConfigProvider locale={antdLocale}>

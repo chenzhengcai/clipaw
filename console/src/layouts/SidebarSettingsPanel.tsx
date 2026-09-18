@@ -35,7 +35,6 @@ import { useTranslation } from "react-i18next";
 import { applyLanguagePreference } from "../utils/languagePreference";
 import { LANGUAGE_LIST } from "../constants/languageList";
 import { useTheme, type ThemeMode } from "../contexts/ThemeContext";
-import { useThemeStore } from "../stores/themeStore";
 import {
   getChatWideModePreference,
   setChatWideModePreference,
@@ -195,7 +194,6 @@ export default function SidebarSettingsPanel({
 }: SidebarSettingsPanelProps) {
   const { t, i18n } = useTranslation();
   const { themeMode, setThemeMode } = useTheme();
-  const { activeThemeId, setActiveThemeId } = useThemeStore();
   const [wideMode, setWideMode] = useState(getChatWideModePreference);
   const [showThinking, setShowThinking] = useState(getShowThinkingPreference);
   const [toolDisplayMode, setToolDisplayMode] = useState(
@@ -227,10 +225,6 @@ export default function SidebarSettingsPanel({
 
   const changeTheme = (theme: ThemeMode) => {
     finishAction(() => setThemeMode(theme));
-  };
-
-  const changeColorScheme = (scheme: string) => {
-    finishAction(() => setActiveThemeId(scheme === "default" ? null : scheme));
   };
 
   const changeContentWidth = (width: ContentWidth) => {
@@ -296,45 +290,6 @@ export default function SidebarSettingsPanel({
       ]}
       value={themeMode}
       onChange={changeTheme}
-    />
-  );
-
-  const colorSchemeChoices = (
-    <ChoicePanel
-      choices={[
-        {
-          value: "default",
-          label: t("sidebar.settings.colorSchemeDefault", "Default"),
-          icon: (
-            <span
-              style={{
-                width: 14,
-                height: 14,
-                borderRadius: 3,
-                background: "#ff7f16",
-                flexShrink: 0,
-              }}
-            />
-          ),
-        },
-        {
-          value: "purple",
-          label: t("sidebar.settings.colorSchemePurple", "Purple"),
-          icon: (
-            <span
-              style={{
-                width: 14,
-                height: 14,
-                borderRadius: 3,
-                background: "#7c5cfc",
-                flexShrink: 0,
-              }}
-            />
-          ),
-        },
-      ]}
-      value={activeThemeId ?? "default"}
-      onChange={changeColorScheme}
     />
   );
 
@@ -407,11 +362,6 @@ export default function SidebarSettingsPanel({
         icon={<Palette size={16} />}
         label={t("sidebar.settings.theme", "Theme")}
         content={themeChoices}
-      />
-      <FlyoutItem
-        icon={<Palette size={16} />}
-        label={t("sidebar.settings.colorScheme", "Color Scheme")}
-        content={colorSchemeChoices}
       />
       <button
         type="button"

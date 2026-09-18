@@ -2763,9 +2763,6 @@
     "settings": {
       "language": "Язык",
       "theme": "Тема",
-      "colorScheme": "Цветовая схема",
-      "colorSchemeDefault": "По умолчанию",
-      "colorSchemePurple": "Фиолетовый",
       "desktopMode": "Режим рабочего стола"
     },
     "quickMenu": {

@@ -2999,9 +2999,6 @@
     "settings": {
       "language": "Idioma",
       "theme": "Tema",
-      "colorScheme": "Esquema de cores",
-      "colorSchemeDefault": "Padrão",
-      "colorSchemePurple": "Roxo",
       "desktopMode": "Modo Desktop"
     },
     "quickMenu": {
