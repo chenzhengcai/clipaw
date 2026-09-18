@@ -24,7 +24,6 @@ dependencies = [
     "reme-ai==0.4.1.11",
     "reme-auto-fin==0.1.2",
     "reme-daily-paper==0.1.2",
-    "transformers>=4.30.0",
     "python-dotenv>=1.0.0",
     "python-socks>=2.5.3",
     "onnxruntime<1.24",
@@ -136,7 +135,6 @@ test = [
     "pytest-xdist>=3.5.0",
     "hypothesis>=6.0.0",
     "respx>=0.22.0",
-    "qoder-agent-sdk==1.0.9",
 ]
 dev = [
     "pre-commit>=4.2.0",
@@ -150,12 +148,6 @@ hub = [
 whisper = [
     "openai-whisper>=20231117",
 ]
-codex = [
-    "openai-codex==0.144.4",
-]
-qoder = [
-    "qoder-agent-sdk==1.0.9",
-]
 qwenpaw-data = [
     "qwenpaw-data-context>=0.3,<0.4",
     "qwenpaw-data-host-core[service]>=0.3,<0.4",
@@ -163,7 +155,7 @@ qwenpaw-data = [
     "qwenpaw-data-skills>=0.3,<0.4",
 ]
 full = [
-    "qwenpaw[qwenpaw-data,hub,local,whisper,codex,qoder]",
+    "qwenpaw[qwenpaw-data,hub,local,whisper]",
 ]
 sip = [
     "pyVoIP>=1.6.0",

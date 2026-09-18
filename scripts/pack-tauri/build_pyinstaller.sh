@@ -96,8 +96,8 @@ echo "== Installing project dependencies =="
 # half-removed pkg_resources (module present, declare_namespace gone), which
 # raises an AttributeError the fallback does not catch — crashing the Feishu
 # channel. The pin keeps every environment in the known-good state.
-install_python_packages -e ".[full]" "setuptools<82"
-echo "Project dependencies installed with full extras"
+install_python_packages -e ".[qwenpaw-data,hub,local]" "setuptools<82"
+echo "Project dependencies installed (without codex/qoder/whisper)"
 
 # Fix agent-client-protocol namespace collision
 # PyPI has an empty 'acp' stub that shadows the real package

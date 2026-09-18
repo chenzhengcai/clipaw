@@ -161,7 +161,9 @@ def main() -> int:
                 # openai-whisper, which makes the build huge and slow and is
                 # only needed for local audio transcription. Use [full] if
                 # you need local Whisper speech-to-text.
-                f"qwenpaw[qwenpaw-data,hub,local,codex,qoder] @ {wheel_uri}",
+                # codex/qoder are also excluded: their CLI binaries add ~400MB
+                # and are not needed for non-coding use cases.
+                f"qwenpaw[qwenpaw-data,hub,local] @ {wheel_uri}",
             ],
             env=install_env,
         )

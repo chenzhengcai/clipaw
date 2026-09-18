@@ -150,8 +150,8 @@ Write-Host "== Installing project dependencies ==" -ForegroundColor Yellow
 # half-removed pkg_resources (module present, declare_namespace gone), which
 # raises an AttributeError the fallback does not catch — crashing the Feishu
 # channel. The pin keeps every environment in the known-good state.
-Install-PythonPackages -Packages @("-e", ".[full]", "setuptools<82")
-Write-Host "Project dependencies installed with full extras" -ForegroundColor Green
+Install-PythonPackages -Packages @("-e", ".[qwenpaw-data,hub,local]", "setuptools<82")
+Write-Host "Project dependencies installed (without codex/qoder/whisper)" -ForegroundColor Green
 
 # Fix agent-client-protocol namespace collision
 # PyPI has an empty 'acp' stub that shadows the real package
