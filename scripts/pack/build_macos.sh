@@ -52,8 +52,13 @@ mkdir -p "${APP_DIR}/Contents/Resources/env"
 tar -xzf "$ARCHIVE" -C "${APP_DIR}/Contents/Resources/env" --strip-components=0
 
 # Fix paths for portability (required or app will crash on launch)
+# Prepend the packed env's bin/ to PATH: entry scripts like conda-unpack use
+# the shebang "#!/usr/bin/env python", which fails with "env: python: No such
+# file or directory" on machines that only have python3 on PATH. The packed
+# env has bin/python -> python3.11, so putting its bin/ first lets those
+# shebangs resolve.
 if [[ -x "${APP_DIR}/Contents/Resources/env/bin/conda-unpack" ]]; then
-  (cd "${APP_DIR}/Contents/Resources/env" && ./bin/conda-unpack)
+  (cd "${APP_DIR}/Contents/Resources/env" && PATH="$PWD/bin:$PATH" ./bin/conda-unpack)
 fi
 
 # Launcher: force packed env; when no TTY log to ~/.qwenpaw/desktop.log (no exec so we see errors)
