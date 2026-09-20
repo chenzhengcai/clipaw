@@ -82,6 +82,7 @@ import {
   wrapChatResponseUsageStream,
 } from "./turnUsage";
 import { wrapReplayFastForward } from "./replayFastForward";
+import { clearTurnStopped, markTurnStopped } from "./stoppedTurns";
 import { useTurnUsageStore } from "./turnUsageStore";
 import ChatHeaderTitle from "./components/ChatHeaderTitle";
 import {
@@ -3116,6 +3117,9 @@ export default function ChatPage() {
         {},
         selectedAgent,
       );
+      // Every turn goes through this fetch, including the SDK's own regenerate.
+      // Clear only this session: another session may still have a stopped turn.
+      clearTurnStopped(entrySnapshot.sessionId);
       const directSubmission =
         !data.submission || data.submission.source === "direct";
       const pendingDirectInput = directSubmission
@@ -4205,6 +4209,10 @@ export default function ChatPage() {
             abort?: () => void;
           },
         ) {
+          // The SDK only writes a canceled status when its stream is still
+          // alive to observe the abort; record the stop itself so tool cards
+          // can close even when the stream died first.
+          markTurnStopped(data.session_id || data.chatSessionId);
           const snapshot = resolveChatRequestSnapshot(
             data,
             {},
@@ -4245,6 +4253,8 @@ export default function ChatPage() {
             {},
             selectedAgent,
           );
+          // Attaching to a live turn only invalidates this session's stop.
+          clearTurnStopped(snapshot.sessionId);
           headers["X-Agent-Id"] = snapshot.agentId;
           const usageTurn = useTurnUsageStore
             .getState()
