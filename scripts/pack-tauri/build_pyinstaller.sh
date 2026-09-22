@@ -131,7 +131,8 @@ echo ""
 BACKEND_DIR="${DIST}/pyinstaller/qwenpaw-backend"
 BACKEND_EXE="${BACKEND_DIR}/qwenpaw-backend"
 CLI_EXE="${BACKEND_DIR}/qwenpaw"
-MODEL_CATALOG="${BACKEND_DIR}/_internal/qwenpaw/providers/data/model_catalog.json"
+MODEL_CATALOG_INDEX="${BACKEND_DIR}/_internal/qwenpaw/providers/data/index.json"
+MODEL_CATALOG_SHARDS="${BACKEND_DIR}/_internal/qwenpaw/providers/data/providers"
 if [ ! -d "${BACKEND_DIR}" ]; then
     echo "ERROR: Backend bundle directory not found at ${BACKEND_DIR}"
     exit 1
@@ -144,8 +145,12 @@ if [ ! -f "${CLI_EXE}" ]; then
     echo "ERROR: CLI executable not found at ${CLI_EXE}"
     exit 1
 fi
-if [ ! -f "${MODEL_CATALOG}" ]; then
-    echo "ERROR: Model catalog not found at ${MODEL_CATALOG}"
+if [ ! -f "${MODEL_CATALOG_INDEX}" ]; then
+    echo "ERROR: Model catalog index not found at ${MODEL_CATALOG_INDEX}"
+    exit 1
+fi
+if [ ! -d "${MODEL_CATALOG_SHARDS}" ]; then
+    echo "ERROR: Model catalog provider shards not found at ${MODEL_CATALOG_SHARDS}"
     exit 1
 fi
 
