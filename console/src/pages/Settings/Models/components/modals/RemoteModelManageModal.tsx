@@ -8,8 +8,6 @@ import {
   ListX,
   ChevronDown,
   ArrowLeft,
-  Eye,
-  EyeOff,
   FlaskConical,
   PlugZap,
   Plus,
@@ -275,31 +273,6 @@ export function RemoteModelManageModal({
       setBusy(null);
     }
   };
-  const handleToggleModelVisibility = async (
-    modelId: string,
-    modelName: string,
-    hidden: boolean,
-  ) => {
-    try {
-      const updated = await api.setModelVisibility(
-        provider.id,
-        modelId,
-        hidden,
-      );
-      message.success(
-        t(hidden ? "modelSelector.modelHidden" : "modelSelector.modelVisible", {
-          name: modelName,
-        }),
-      );
-      await apply(updated);
-    } catch (error) {
-      const errMsg =
-        error instanceof Error
-          ? error.message
-          : t("modelSelector.visibilityFailed");
-      message.error(errMsg);
-    }
-  };
   const number = (value?: number | null) =>
     value == null ? t("models.unknown") : formatCompact(value);
 
@@ -442,12 +415,6 @@ export function RemoteModelManageModal({
               const isSelected = selectedIds.has(model.id);
               const isNew = !isSelected && !seenIds.has(model.id);
               const expanded = configId === model.id;
-              const isHidden = (current.hidden_model_ids ?? []).includes(
-                model.id,
-              );
-              const hiddenTextStyle = isHidden
-                ? { opacity: 0.45, fontStyle: "italic" as const }
-                : undefined;
               return (
                 <ModelCardSurface
                   tilt={3}
@@ -465,38 +432,14 @@ export function RemoteModelManageModal({
                   <div className={styles.row}>
                     <div className={styles.identity}>
                       <div className={styles.name}>
-                        <strong style={hiddenTextStyle}>{model.name}</strong>
+                        <strong>{model.name}</strong>
                         {isNew && <span className={styles.newBadge}>New</span>}
                       </div>
-                      <span
-                        className={styles.id}
-                        title={model.id}
-                        style={hiddenTextStyle}
-                      >
+                      <span className={styles.id} title={model.id}>
                         {model.id}
                       </span>
                       <div className={styles.facts}>
                         <CapabilityTags model={model} />
-                        {isHidden && (
-                          <Tag
-                            style={{
-                              fontSize: 11,
-                              marginRight: 4,
-                              color: "var(--app-text-tertiary)",
-                              background: "transparent",
-                              border: "1px solid var(--app-border-strong)",
-                            }}
-                          >
-                            <EyeOff
-                              size={14}
-                              style={{
-                                marginRight: 4,
-                                verticalAlign: "-3px",
-                              }}
-                            />
-                            {t("modelSelector.hidden", "已隐藏")}
-                          </Tag>
-                        )}
                         {model.remote_missing && (
                           <Tag color="warning">{t("models.remoteMissing")}</Tag>
                         )}
@@ -560,38 +503,6 @@ export function RemoteModelManageModal({
                               onClick={() =>
                                 setConfigId(expanded ? null : model.id)
                               }
-                            />
-                          </Tooltip>
-                          <Tooltip
-                            title={t(
-                              isHidden
-                                ? "modelSelector.restoreModel"
-                                : "modelSelector.hideModel",
-                            )}
-                          >
-                            <Button
-                              type="text"
-                              aria-label={t(
-                                isHidden
-                                  ? "modelSelector.restoreModel"
-                                  : "modelSelector.hideModel",
-                              )}
-                              icon={
-                                isHidden ? (
-                                  <EyeOff size={17} />
-                                ) : (
-                                  <Eye size={17} />
-                                )
-                              }
-                              disabled={loading || busy !== null}
-                              onClick={() =>
-                                handleToggleModelVisibility(
-                                  model.id,
-                                  model.name,
-                                  !isHidden,
-                                )
-                              }
-                              style={isHidden ? { opacity: 0.45 } : undefined}
                             />
                           </Tooltip>
                         </>
