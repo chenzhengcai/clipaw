@@ -47,6 +47,20 @@ export function VolcengineConfigCard({ onConfigChange }: VolcengineConfigCardPro
   const [origApiKey, setOrigApiKey] = useState("");
   const [origResourceId, setOrigResourceId] = useState("volc.bigasr.sauc.duration");
 
+  // 后端 /transcribe/ws 以 transcription_provider_type == "volcengine_bigmodel"
+  // 作为语音入口开关，凭证与该项由不同接口保存，缺了这项语音输入会报
+  // "Volcengine ASR not configured"，因此保存/加载凭证时自动补齐。
+  const ensureVolcengineProviderType = useCallback(async () => {
+    try {
+      const res = await agentApi.getTranscriptionProviderType();
+      if (res.transcription_provider_type !== "volcengine_bigmodel") {
+        await agentApi.updateTranscriptionProviderType("volcengine_bigmodel");
+      }
+    } catch {
+      // best-effort：后端不可达时静默跳过，语音入口会给出明确报错
+    }
+  }, []);
+
   const loadConfig = useCallback(async () => {
     try {
       const envs = await envApi.listEnvs();
@@ -60,10 +74,11 @@ export function VolcengineConfigCard({ onConfigChange }: VolcengineConfigCardPro
       setResourceId(rid); setOrigResourceId(rid);
       setLoaded(true);
       onConfigChange?.(!!ak);
+      if (ak) await ensureVolcengineProviderType();
     } catch {
       setLoaded(true);
     }
-  }, [onConfigChange]);
+  }, [onConfigChange, ensureVolcengineProviderType]);
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
@@ -130,6 +145,7 @@ export function VolcengineConfigCard({ onConfigChange }: VolcengineConfigCardPro
       else delete newEnvs[KEY_API_KEY];
       newEnvs[KEY_RESOURCE_ID] = resourceId || "volc.bigasr.sauc.duration";
       await envApi.saveEnvs(newEnvs);
+      if (apiKey) await ensureVolcengineProviderType();
       setOrigApiKey(apiKey);
       setOrigResourceId(resourceId);
       setEditing(false);
