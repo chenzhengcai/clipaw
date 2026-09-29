@@ -2194,7 +2194,10 @@ describe("ChatPage coverage", () => {
   });
 
   // ── Whisper speech button renders when enabled ─────────────────────────
+  // fork(语音输入插件): 插件开关关闭（qwenpaw_voice_enabled="0"）时，
+  // Chat 回退官方内置 WhisperSpeechButton，本组用例验证该回退路径。
   it("renders whisper button when transcription is enabled", async () => {
+    localStorage.setItem("qwenpaw_voice_enabled", "0");
     mockGetTranscriptionProviderType.mockResolvedValueOnce({
       transcription_provider_type: "openai_whisper",
     });
@@ -2380,7 +2383,10 @@ describe("ChatPage coverage", () => {
   });
 
   // ── Ctrl+Shift+M shortcut for voice recording ─────────────────────────
+  // fork(语音输入插件): 插件开关关闭（qwenpaw_voice_enabled="0"）时，
+  // Chat 回退官方内置 WhisperSpeechButton，本组用例验证该回退路径。
   it("Ctrl+Shift+M shortcut triggers whisper recording when enabled", async () => {
+    localStorage.setItem("qwenpaw_voice_enabled", "0");
     mockGetTranscriptionProviderType.mockResolvedValueOnce({
       transcription_provider_type: "openai_whisper",
     });

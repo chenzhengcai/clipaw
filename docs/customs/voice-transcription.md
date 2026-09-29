@@ -1,505 +1,335 @@
-# 语音转写功能设计说明
+# 语音输入功能设计说明（插件化架构）
 
 ## 概述
 
-语音转写功能允许用户在聊天对话中通过语音输入文字，支持实时流式识别。系统支持三种 ASR（自动语音识别）后端：
+语音输入功能允许用户在聊天对话中通过语音输入文字，基于**火山引擎大模型流式 ASR**（WebSocket 实时识别），支持：
 
-| Provider | 说明 | 特点 |
-|----------|------|------|
-| `whisper_api` | OpenAI 兼容的 Whisper API 端点 | 录音完成后一次性转写 |
-| `local_whisper` | 本地安装的 openai-whisper 库 | 离线可用，无需网络 |
-| `volcengine_bigmodel` | 火山引擎大模型流式 ASR | **实时流式识别**，边说边出文字 |
-
-> **当前默认**：系统启动时自动将 `transcription_provider_type` 设为 `volcengine_bigmodel`，使用火山引擎流式 ASR 作为主要语音输入方式。Whisper API / Local Whisper 仍保留作为一次性转写备选。
-
-## 架构设计
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        前端 (Console)                            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────┐   ┌───────────────────┐   ┌───────────────┐  │
-│  │ Chat/index   │──▶│WhisperSpeechButton│──▶│ WebSocket 连接 │  │
-│  │  (快捷键监听) │   │  (录音 + PCM 编码) │   │ (实时推送音频) │  │
-│  └──────────────┘   └───────────────────┘   └───────┬───────┘  │
-│                                                      │          │
-│  ┌──────────────────────────────────────────────────┐│         │
-│  │ Settings/VoiceTranscription                      ││         │
-│  │  ├─ VolcengineConfigCard (凭证管理+连通性测试)    ││         │
-│  │  ├─ ShortcutSettings (快捷键配置)                 ││         │
-│  │  ├─ ProviderTypeCard (后端选择)                   ││         │
-│  │  └─ ProviderSelectCard (Whisper选择)              ││         │
-│  └──────────────────────────────────────────────────┘│         │
-│                                                      │          │
-│  ┌──────────────────────────────────────────────────┐│         │
-│  │ api/clientConfig.ts (持久化配置)                  ││         │
-│  │  - voice_connected (连接状态)                     ││         │
-│  │  - qwenpaw_voice_shortcut (快捷键)               ││         │
-│  │  - qwenpaw_voice_shortcut_mode (模式)            ││         │
-│  │  - qwenpaw-last-used-agent (上次使用的 Agent)     ││         │
-│  └──────────────────────────────────────────────────┘│         │
-│                                                      │          │
-└──────────────────────────────────────────────────────┼──────────┘
-                                                       │
-                                                       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        后端 (Python)                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ workspace.py 路由                                         │   │
-│  │  ├─ WebSocket /transcribe/ws    (流式转写)                │   │
-│  │  ├─ POST /voice-test-connection (连通性测试)              │   │
-│  │  ├─ GET/PUT /client-config      (客户端配置持久化)        │   │
-│  │  ├─ GET/PUT /transcription-provider-type                  │   │
-│  │  └─ GET/PUT /transcription-providers                      │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ audio_transcription.py                                    │   │
-│  │  ├─ transcribe_audio()           (统一入口)               │   │
-│  │  ├─ _transcribe_whisper_api()    (Whisper API)            │   │
-│  │  ├─ _transcribe_local_whisper()  (本地 Whisper)           │   │
-│  │  ├─ _transcribe_volcengine_bigmodel() (火山一次性)        │   │
-│  │  ├─ stream_transcribe_volcengine()    (火山流式 ASR)      │   │
-│  │  └─ test_volcengine_connection()    (连通性测试)          │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ config.py                                                 │   │
-│  │  └─ transcription_provider_type: Literal[                 │   │
-│  │       "disabled"|"whisper_api"|"local_whisper"             │   │
-│  │       |"volcengine_bigmodel"]                             │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ agents.py                                                 │   │
-│  │  └─ PUT /agents/active (持久化活跃 Agent)                 │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              火山引擎大模型 ASR 服务                              │
-│  wss://openspeech.bytedance.com/api/v3/sauc/bigmodel            │
-│  - 二进制帧协议 (4 字节头 + payload)                             │
-│  - 实时推送 partial/final 结果                                   │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## 核心流程
-
-### 1. 流式语音转写（Volcengine BigModel）— 主要方式
-
-```
-用户按下录音键 / 触发快捷键
-    │
-    ▼
-前端检查 isVoiceConnected() — 未测试连通性则禁用按钮
-    │
-    ▼
-前端获取麦克风权限 (MediaDevices.getUserMedia)
-    │
-    ▼
-前端打开 WebSocket → ws(s)://{backend}/workspace/transcribe/ws
-    │
-    ▼
-ws.onopen: 后端建立火山引擎 WSS 连接，发送 config 帧
-    │
-    ▼
-前端 ScriptProcessorNode 采集音频 → 重采样为 16kHz Int16 PCM
-    │
-    ├──(每帧约 100ms)──▶ 前端发送 Binary Frame (PCM 数据)
-    │                         │
-    │                         ▼
-    │                   后端 stream_transcribe_volcengine()
-    │                         │
-    │                         ▼
-    │                   后端转发到火山引擎 WSS 端点
-    │                         │
-    │                         ▼
-    │                   火山返回 partial/final JSON
-    │                         │
-    │                         ▼
-    │                   后端推送 {"type":"partial","text":"..."} 给前端
-    │                         │
-    ◀─────────────────────────┘
-    │
-    ▼
-前端实时更新输入框文字 (onTranscription callback, isPartial=true)
-    │  └─ 替换策略：保留语音开始前的已有文字 (voiceBaseRef)，
-    │     用新的 partial 文本替换语音部分 (voiceLenRef)
-    │
-    ▼
-用户松开录音键 / 点击停止 / 发送消息
-    │
-    ▼
-前端发送 Text Frame "DONE"
-    │
-    ▼
-后端发送 final 帧，关闭连接
-    │
-    ▼
-前端 onTranscription(text, isPartial=false) — 最终文字填入输入框
-    │
-    ▼
-用户发送消息后，前端调用 resetSession() 清空 ASR 会话
-```
-
-### 2. 一次性转写（Whisper API / Local Whisper）— 备选方式
-
-```
-用户按下录音键
-    │
-    ▼
-前端录制完整音频 → 停止后编码为 WAV/WebM
-    │
-    ▼
-前端 POST /workspace/transcribe (multipart/form-data)
-    │
-    ▼
-后端调用 transcribe_audio(file_path)
-    │
-    ├─ whisper_api → 调用远程 /v1/audio/transcriptions
-    ├─ local_whisper → 本地 whisper.load_model("base").transcribe()
-    └─ volcengine_bigmodel → _transcribe_volcengine_bigmodel()
-         (ffmpeg 转 PCM 16kHz → 流式发送 → 收集最终文本)
-    │
-    ▼
-返回完整文字给前端
-```
-
-## 文件清单
-
-### 前端
-
-| 文件路径 | 职责 | 改动类型 |
-|----------|------|---------|
-| `console/src/pages/Chat/components/WhisperSpeechButton/index.tsx` | 录音按钮组件，WebSocket 流式 ASR + PCM 重采样 + 连通性检查 | 修改（重构） |
-| `console/src/pages/Chat/index.tsx` | 聊天页面，集成语音按钮 + 可配置快捷键 + 流式文字替换 + 发送时停止录音 | 修改 |
-| `console/src/pages/Settings/VoiceTranscription/index.tsx` | 语音转写设置页面入口 | 修改（精简） |
-| `console/src/pages/Settings/VoiceTranscription/useVoiceTranscription.ts` | 设置页面状态管理 hook | 修改（精简） |
-| `console/src/pages/Settings/VoiceTranscription/components/VolcengineConfigCard.tsx` | 火山引擎凭证配置 + 连通性测试 + 连接状态管理 | **新增** |
-| `console/src/pages/Settings/VoiceTranscription/components/ShortcutSettings.tsx` | 快捷键录制与配置（toggle/hold 模式） | **新增** |
-| `console/src/pages/Settings/VoiceTranscription/components/ProviderTypeCard.tsx` | ASR 后端类型选择（新增 volcengine 选项） | 修改 |
-| `console/src/pages/Settings/VoiceTranscription/components/index.ts` | 组件导出索引 | 修改 |
-| `console/src/api/clientConfig.ts` | 客户端配置持久化（跨 Tauri 端口重启） | **新增** |
-| `console/src/api/modules/agent.ts` | `testVoiceConnection` + `setActiveAgent` API 方法 | 修改 |
-| `console/src/stores/agentStore.ts` | Agent 选择持久化到后端 + clientConfig | 修改 |
-| `console/src/App.tsx` | 启动时调用 `loadClientConfig()` 恢复配置 | 修改 |
-| `console/src/locales/en.json` | 英文国际化（火山引擎配置、快捷键、连通性测试） | 修改 |
-| `console/src/locales/zh.json` | 中文国际化 | 修改 |
-
-### 后端
-
-| 文件路径 | 职责 | 改动类型 |
-|----------|------|---------|
-| `src/qwenpaw/agents/utils/audio_transcription.py` | 音频转写核心逻辑（三种 provider + 流式 ASR + 连通性测试 + 火山二进制帧协议） | 修改（大幅扩展） |
-| `src/qwenpaw/app/routers/workspace.py` | WebSocket 端点 + REST API 端点 + client-config 持久化 | 修改 |
-| `src/qwenpaw/app/routers/agents.py` | `PUT /agents/active` 持久化活跃 Agent | 修改 |
-| `src/qwenpaw/config/config.py` | `transcription_provider_type` 新增 `volcengine_bigmodel` | 修改 |
-
-## API 端点
-
-### WebSocket: `/workspace/transcribe/ws`
-
-流式语音转写 WebSocket 端点。
-
-**协议（浏览器 → 服务端）：**
-- Binary Frame: 原始 PCM Int16 16kHz 单声道音频块
-- Text Frame `"DONE"`: 录音结束信号
-- Text Frame `"RESET"`: 丢弃当前 ASR 会话，重新开始
-
-**协议（服务端 → 浏览器）：**
-- `{"type": "partial", "text": "..."}` — 中间识别结果
-- `{"type": "final", "text": "..."}` — 最终识别结果
-- `{"type": "error", "message": "..."}` — 错误信息
-
-**服务端逻辑：**
-1. 接受 WebSocket 连接后检查 `transcription_provider_type` 是否为 `volcengine_bigmodel`
-2. 调用 `stream_transcribe_volcengine()` 创建火山引擎 ASR 会话
-3. 从 WebSocket 接收音频帧，推入 `audio_queue`
-4. 收到 `"DONE"` 后推入 `None` 哨兵触发结束标记
-5. 收到 `"RESET"` 后关闭当前会话并重新创建新会话
-
-### POST: `/workspace/voice-test-connection`
-
-测试火山引擎 ASR 连通性。
-
-**请求体（可选）：**
-```json
-{
-  "api_key": "your-api-key",
-  "resource_id": "volc.bigasr.sauc.duration"
-}
-```
-
-**响应：**
-```json
-{ "ok": true }
-// 或
-{ "ok": false, "error": "error message" }
-```
-
-**逻辑：** 连接火山引擎 WSS 端点，发送 config 帧和 200ms 静音音频，等待响应。任何非 error 响应即表示连通。
-
-### PUT: `/agents/active`
-
-持久化当前活跃 Agent ID 到配置文件。
-
-**请求体：**
-```json
-{ "agent_id": "xiaomi" }
-```
-
-### GET/PUT: `/workspace/client-config`
-
-客户端配置持久化。解决 Tauri 端口变化导致 localStorage 丢失的问题。
-
-**持久化的 key：**
-- `voice_connected` — 火山引擎连接状态（`"1"` = 已连接）
-- `qwenpaw_voice_shortcut` — 快捷键定义（JSON）
-- `qwenpaw_voice_shortcut_mode` — 快捷键模式（`toggle` / `hold`）
-- `qwenpaw-last-used-agent` — 上次使用的 Agent ID
-
-**存储位置：** `~/.clipaw/client-config.json`
-
-## 快捷键系统
-
-### 两种模式
-
-| 模式 | 行为 |
+| 能力 | 说明 |
 |------|------|
-| `toggle` | 按一次开始录音，再按一次停止 |
-| `hold` | 按住录音，松开停止 |
+| 实时流式识别 | 边说边出文字，partial 帧累积替换 |
+| 一键总开关 | 关闭插件实时语音后自动回退**官方内置语音**（Whisper 按钮 / SDK `allowSpeech`） |
+| 可配置快捷键 | `toggle`（按一下开/关）/ `hold`（按住说话） |
+| 凭证连通性测试 | 未通过测试时麦克风按钮禁用 |
+| 跨重启配置持久化 | 解决 Tauri 端口变化导致 localStorage 丢失 |
 
-### 快捷键定义格式
+> **★ 本功能已完整插件化**，代码位于 `plugins/apps/qwenpaw-voice/`。
+> 上游文件（`audio_transcription.py` / `workspace.py` / `config.py` 等）**不再
+> 包含语音实现**；`Chat/index.tsx` 保留上游原生语音代码，仅新增插件开关门控
+> （纯增量 +44/-5）。合并 `upstream/main` 时语音部分近零冲突。详见「冲突面」章节。
 
-```typescript
-interface ShortcutDef {
-  ctrl: boolean;
-  shift: boolean;
-  alt: boolean;
-  meta: boolean;  // macOS ⌘
-  code: string;   // KeyboardEvent.code, e.g. "KeyM"
-}
+## 为什么改插件
+
+原实现深度嵌入上游文件，是 merge 上游时的主要冲突源：
+
+| 文件 | 原 fork 改动量 | 现在 |
+|------|--------------|------|
+| `src/qwenpaw/agents/utils/audio_transcription.py` | +593 行（火山流式/帧协议） | **0**（已还原） |
+| `src/qwenpaw/app/routers/workspace.py` | +164 行（WS/REST/client-config） | **0**（已还原） |
+| `src/qwenpaw/config/config.py` | +4 行（provider 枚举） | **0**（已还原） |
+| `console/src/pages/Chat/index.tsx` | +659 行 | 恢复上游语音块，仅新增开关门控（**+44/-5 纯增量**） |
+| `console/src/pages/Chat/voice/*` | 3 个新文件 | **删除**（移入插件） |
+| `console/src/pages/Settings/VoiceTranscription/*` | 大幅改写 | **0**（已还原） |
+
+## 插件结构
+
+```
+plugins/apps/qwenpaw-voice/
+├── plugin.json                  # manifest（backend + frontend entry）
+├── plugin.py                    # 后端入口：plugin = QwenpawVoicePlugin()
+├── backend/
+│   ├── __init__.py
+│   ├── router.py                # APIRouter: /status, /voice-test-connection,
+│   │                            #   /client-config(GET/PUT), WS /transcribe/ws
+│   ├── volcengine_asr.py        # 火山二进制帧协议 + 流式会话 + 连通性测试
+│   └── client_config.py         # ~/.clipaw/client-config.json 读写
+└── frontend/
+    ├── vite.config.ts           # ESM + classic JSX + external react
+    ├── package.json
+    ├── tsconfig.json
+    ├── dist/index.js            # 构建产物（自包含，无裸 import）
+    └── src/
+        ├── index.tsx            # 入口：注册 route/menu/senderPrefix + 快捷键 + 提交拦截 + 总开关
+        ├── host.ts              # window.QwenPaw host 桥接（React/antd/fetch）
+        ├── i18n.ts              # 自带中英文案（不写上游 locales）
+        ├── config.ts            # 配置键 + 总开关 + 快捷键定义 + 凭证读写
+        ├── clientConfig.ts      # 插件侧客户端配置持久化
+        ├── SpeechButton.tsx     # 麦克风按钮（WS 流式 + PCM 重采样）
+        ├── useVoiceInput.ts     # 替换式流式转写（voiceBaseRef/voiceLenRef）
+        └── SettingsPage.tsx     # 设置页（总开关 / 凭证 / 快捷键）
 ```
 
-### 默认快捷键
+## 架构图
 
-- **macOS**: `⌘ + ⇧ + M`
-- **Windows/Linux**: `Ctrl + Shift + M`
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Console (宿主)                    插件 plugins/apps/qwenpaw-voice │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  window.QwenPaw.host  ──────────▶  getHost() (React/antd/fetch) │
+│                                                                 │
+│  ChatList.senderPrefix 扩展槽 ◀── ns.chat.sender.addPrefix()    │
+│      └─ 挂载 SpeechButton（总开关开启时）                        │
+│                                                                 │
+│  routeRegistry / menuRegistry ◀── ns.route.add / ns.menu.add    │
+│      └─ /qwenpaw-voice 设置页（菜单「语音输入」+ 麦克风图标）      │
+│                                                                 │
+│  Chat/index.tsx：上游语音块原样保留，仅新增 pluginVoiceOn 门控    │
+│  （开→插件麦克风；关→官方 WhisperSpeechButton / allowSpeech）    │
+│                                                                 │
+└────────────────────────────────┬────────────────────────────────┘
+                                 │ HTTP/WS  /api/qwenpaw-voice/*
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  插件后端 router.py (api.register_http_router, prefix=...)       │
+│   ├─ GET  /status                                               │
+│   ├─ POST /voice-test-connection                                │
+│   ├─ GET/PUT /client-config                                     │
+│   └─ WS   /transcribe/ws                                        │
+│                                                                 │
+│  volcengine_asr.py ──▶ wss://openspeech.bytedance.com/...       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### 存储位置
+## 关键设计点
 
-快捷键通过 `clientConfig.ts` 同时存储在：
-1. `localStorage`（前端快速读取）
-2. 后端 `client-config.json`（跨端口持久化）
+### 1. 后端零改动
 
-### 快捷键监听范围
+- `audio_transcription.py`、`workspace.py`、`config.py` **已还原为 fork base 版本**（diff = 0）
+- 火山 ASR 全部逻辑复制到 `backend/volcengine_asr.py`（唯一改动：`load_envs`
+  由包内相对导入改为 `from qwenpaw.envs import load_envs` 绝对导入）
+- 插件路由经 `api.register_http_router(router, prefix="/qwenpaw-voice")` 挂到 `/api/qwenpaw-voice/*`
+- 原 `/workspace/transcribe/ws` 的 `transcription_provider_type != "volcengine_bigmodel"` 检查
+  改为插件内 `_credentials_ready()` 凭证检查 —— **不再依赖上游 config 枚举**
 
-- 聊天页面（`isChatActive()` 为 true 时）
-- Coding 模式页面（`location.pathname` 以 `/coding` 开头时）
+### 2. 前端集成：senderPrefix 槽 + Chat 开关门控
 
-## 连通性检查机制
+Chat 页复用已有的 `ChatList.senderPrefix` 扩展槽挂插件麦克风：
 
-### 前端
+```tsx
+// 插件入口自动注册
+ns.chat.sender.addPrefix(PLUGIN_ID, <VoiceSenderPrefix />, { order: 0 });
+```
 
-- `VolcengineConfigCard` 组件提供"测试连通性"按钮
-- 测试成功后设置 `voice_connected = "1"` 到 clientConfig
-- `WhisperSpeechButton` 通过 `isVoiceConnected()` 检查连接状态
-- **未测试连通性时，录音按钮禁用**，Tooltip 提示"语音服务未连接"
+`Chat/index.tsx` **保留上游原生语音块**（whisper 探测 / WhisperSpeechButton /
+内置快捷键 / `allowSpeech` 公式，与 merge-base 逐字一致），只新增
+`pluginVoiceOn` 门控：
 
-### 后端
+```tsx
+// 插件开启 → 内置按钮让位；关闭 → 显示官方内置按钮
+{whisperEnabled && !pluginVoiceOn ? (
+  <WhisperSpeechButton ref={whisperSpeechRef} ... />
+) : null}
 
-- `test_volcengine_connection()` 连接火山引擎 WSS，发送静音音频验证
-- 支持 15 秒超时
-- SSL 证书验证跳过（兼容企业代理环境）
+// allowSpeech 同理：恢复官方公式并加开关
+allowSpeech: !pluginVoiceOn && whisperChecked && !whisperEnabled,
+```
+
+### 3. 总开关：实时语音 ⇄ 官方内置语音
+
+设置页第一张卡片控制 `qwenpaw_voice_enabled`（默认开启）：
+
+| 状态 | 麦克风 | 快捷键 | SDK `allowSpeech` |
+|------|--------|--------|-------------------|
+| 开启（默认） | 插件流式麦克风（senderPrefix 槽） | 插件可配置快捷键（toggle/hold） | 禁用（防双麦克风） |
+| 关闭（`"0"`） | 官方 `WhisperSpeechButton`（whisper provider 已配置时） | 内置 Ctrl/Cmd+Shift+M | 恢复官方公式 |
+
+同步机制（`config.ts saveVoiceEnabled`）：
+
+1. 写 `localStorage.qwenpaw_voice_enabled`
+2. 持久化到 `~/.clipaw/client-config.json`（跨重启）
+3. 派发自定义事件 `qwenpaw-voice-change`（**同 tab**——设置页与 Chat 同属
+   一个 SPA，storage 事件只跨 tab 触发）
+4. storage 事件负责其他标签页
+
+Chat 页与插件的 `VoiceSenderPrefix` 各自监听上述两类事件刷新
+`pluginVoiceOn` / `voiceEnabled`，切换即时生效、无需刷新。
+
+**重启持久化闭环**：插件 bundle 加载时 `loadClientConfig()` 从后端恢复
+`qwenpaw_voice_enabled` 到 localStorage，恢复完成后**再次派发**
+`qwenpaw-voice-change`——即使 Tauri 换端口清空了 localStorage、Chat 页已先
+以默认值挂载，事件到达后立即纠正为持久化的开关状态。
+
+**按钮位置/图标统一（开/关对输入框无感知）**：插件麦克风固定渲染在
+sender prefix 行**第一项**（`Chat/index.tsx` 里 `{pluginSenderPrefix}` 排在
+`prefix` 块最前），与官方 `WhisperSpeechButton` 同一位置。
+
+图标/容器做到与官方**逐字段等价**（以生产环境真实 DOM 为基准核对）：
+
+| 项 | 官方 WhisperSpeechButton | 插件 SpeechButton |
+|----|-------------------------|-------------------|
+| button class | antd 生成 `qwenpaw-btn qwenpaw-btn-text qwenpaw-btn-color-default qwenpaw-btn-variant-text qwenpaw-btn-icon-only` + `qwenpaw-sender-actions-btn qwenpaw-spark-icon-button spark-button` | 同（前 5 个 antd 自动生成，后 3 个手动 `className` 补齐） |
+| button style | `font-weight: 500; line-height: 1;` | 同 |
+| 图标包裹 | `span.spark-icon.spark-icon-spark-mic-line` + `role=img aria-label=spark-mic-line data-spark-icon=true` | **同**（直接复用官方类名，console 已全局加载 `.spark-icon` CSS） |
+| 图形 | svg `width/height=1em viewBox="0 0 1024 1024" overflow="hidden" fill="currentColor" aria-hidden="true"` + 3 条 path | **同**（path 逐字复刻） |
+
+> **尺寸的真正来源**：Chat 的 less 用 `[class$="-sender-actions-btn"]`
+> 把该按钮固定为 **44×44px、圆角 12px**。官方按钮由 SDK 自动带上这个
+> class，插件按钮必须手动补 —— 缺它则退化成裸 1em 图标，这就是此前
+> "图标比官方小"的根因。
+
+插件 bundle 无法 import `@agentscope-ai/icons`（blob 加载时裸 import 会
+失败），但 console 已全局加载该库的 `.spark-icon` CSS，故插件**直接复用
+官方类名**（无需自注入样式），DOM 与继承链完全一致。三态图标（idle
+`SparkMicLine` / loading `LoadingOutlined 1.2em` / recording
+`RecordingIcon 1.2em`）亦与官方相同。
+
+开关切换只换**点击行为**（流式 vs 官方一次性），位置与外观不变。
+
+### 4. 「发送时停止录音」如何做到零侵入
+
+原实现在 `handleBeforeSubmit` 两处调用 `stopVoiceOnSubmit()`。
+插件改为**捕获阶段 DOM 监听**（`index.tsx` 的 `VoiceSenderPrefix`）：
+
+- `keydown`（Enter，非 Shift）且 target 是 textarea → 停止录音 + `resetSession()` + 清边界
+- `click` 命中含 `send` 的按钮 → 同上
+
+这样录制/提交的生命周期完全由插件自管，Chat 页无需任何调用点。
+
+### 5. 前端 bundle 必须在宿主 React 内运行
+
+宿主用 `import(blobUrl)` 加载插件（`usePluginLoader.executePluginScript`），因此：
+
+- **必须是 ESM**（`formats: ["es"]`），不能用 IIFE
+- **不能有裸 `import "react"`**（blob URL 无模块解析）→ 所有 React/antd 从
+  `window.QwenPaw.host` 取；`jsxRuntime: "classic"` + 本地 `const React = host.React`
+- **不能用 react-i18next**（它自带 `import "react"`）→ `i18n.ts` 自带文案表 +
+  基于 host React 的 `useTranslation`，语言跟随 `localStorage.language`
+
+验证：`grep -E '^import' dist/index.js` 应为空。
+
+### 6. 自动发现
+
+`src/qwenpaw/app/_app.py` 的 `_BUNDLED_PLUGIN_IDS`（**fork 专属机制**）加入
+`"qwenpaw-voice"`，启动时把 `plugins/apps/qwenpaw-voice/` 复制进运行时插件
+目录（`$QWENPAW_WORKING_DIR/plugins`，本机为 `~/.qwenpaw/plugins`），随插件
+系统自动加载，无需手动 `qwenpaw plugin install`。
+
+同步为**版本感知**：比对源/目标 `plugin.json` 的 `version`，不一致才整体替换
+（一致则不动运行时，保护手工修改）。因此**修改插件源码后必须递增
+`plugin.json` 版本号**，否则运行时继续跑旧拷贝。复制时排除 `node_modules` /
+`__pycache__` 等开发产物（运行时只需 `frontend/dist/index.js`）。
+
+### 7. 配置存储
+
+| 类型 | 位置 |
+|------|------|
+| 火山凭证（API Key / Resource ID） | envs store（`volcengine_asr_api_key` 等） |
+| UI 配置（总开关/快捷键/连接状态） | `~/.clipaw/client-config.json`，由插件 REST 提供 |
+| Agent 持久化 | 同上文件；Console 的 `clientConfig.ts`（fork 文件）指向插件端点 |
+
+> 火山 ASR 不再写入上游 `config.agents.transcription_provider_type`。
+> 上游的 Whisper API / Local Whisper 转写能力保持原样可用。
+
+## 冲突面
+
+合并 `upstream/main` 时，语音相关的冲突点：
+
+| 文件 | 状态 | 冲突可能性 |
+|------|------|-----------|
+| `plugins/apps/qwenpaw-voice/**` | 全新目录，上游不存在 | **无** |
+| `src/qwenpaw/**`（语音相关） | 与 fork base 完全一致 | **无** |
+| `console/src/pages/Settings/VoiceTranscription/**` | 与 fork base 完全一致 | **无** |
+| `console/src/pages/Chat/index.tsx` | 上游语音块原样保留，仅新增开关门控（+44/-5 纯增量） | 低：门控为独立新增块，上游改动命中同区域才会冲突 |
+| `src/qwenpaw/app/_app.py` | fork 专属的 `_BUNDLED_PLUGIN_IDS` 加一项 | 低（该机制本身即 fork 新增） |
+
+**结论**：语音功能的冲突面从「6 个上游文件 / 1900+ 行」压缩到
+「1 个上游文件的纯增量门控块 + 1 个 fork 专属常量的 1 个数组项」。
+
+## API 端点（插件提供）
+
+### WebSocket: `/api/qwenpaw-voice/transcribe/ws`
+
+**浏览器 → 服务端：**
+- Binary Frame：原始 PCM Int16 16kHz 单声道
+- Text `"DONE"`：录音结束
+- Text `"RESET"`：丢弃当前会话重开
+
+**服务端 → 浏览器：**
+- `{"type":"partial","text":"..."}` / `{"type":"final","text":"..."}` / `{"type":"error","message":"..."}`
+
+### POST `/api/qwenpaw-voice/voice-test-connection`
+
+请求体可选 `{api_key, resource_id}`；返回 `{ok: true}` 或 `{ok: false, error}`。
+
+### GET/PUT `/api/qwenpaw-voice/client-config`
+
+读写 `~/.clipaw/client-config.json`（PUT 为合并写入）。
+
+### GET `/api/qwenpaw-voice/status`
+
+返回 `{provider, configured}` —— 是否已配置火山凭证。
 
 ## 火山引擎 BigModel ASR 协议
 
-### 连接地址
+- 连接：`wss://openspeech.bytedance.com/api/v3/sauc/bigmodel`
+- 帧：4 字节头 + 4 字节 payload_size + payload（大端）
+- 消息类型：Full Client Request(1) / Audio Only(2) / Server Response(9) / Error(15)
+- 音频块：200ms @16kHz/16bit/mono = 6400 字节
+- 鉴权：新版 `X-Api-Key`；旧版 `X-Api-App-Key` + `X-Api-Access-Key`
+- SSL 跳过证书校验（企业代理自签证书兼容）
 
-```
-wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
-```
-
-### 认证方式
-
-**方式一：新版控制台（API Key）**
-```
-X-Api-Key: {api_key}
-X-Api-Resource-Id: {resource_id}  (默认: volc.bigasr.sauc.duration)
-X-Api-Request-Id: {uuid}
-X-Api-Sequence: -1
-```
-
-**方式二：旧版控制台（App ID + Access Token）**
-```
-X-Api-App-Key: {app_id}
-X-Api-Access-Key: {access_token}
-X-Api-Resource-Id: {resource_id}
-X-Api-Request-Id: {uuid}
-X-Api-Sequence: -1
-```
-
-### 二进制帧格式
-
-每帧 4 字节头 + 4 字节 payload_size + payload：
-
-```
-Byte 0: (protocol_version << 4) | header_size   →  0x11
-Byte 1: (message_type << 4) | flags
-Byte 2: (serialization << 4) | compression
-Byte 3: 0x00 (reserved)
-Byte 4-7: payload_size (big-endian uint32)
-Byte 8+:  payload
-```
-
-- **Full Client Request** (mt=1, flags=0, ser=1): JSON payload 包含音频参数
-- **Audio Only** (mt=2, flags=0): 纯 PCM 音频数据
-- **Last Audio** (mt=2, flags=2): 最后一帧音频（空 payload）
-- **Server Response** (mt=9, ser=1): JSON 响应，包含识别结果
-- **Server Error** (mt=15): 错误响应
-
-### JSON 配置 payload
-
-```json
-{
-  "user": { "uid": "qwenpaw" },
-  "audio": {
-    "format": "pcm",
-    "rate": 16000,
-    "bits": 16,
-    "channel": 1,
-    "language": "zh-CN"
-  },
-  "request": {
-    "model_name": "bigmodel",
-    "enable_itn": true,
-    "enable_punc": true
-  }
-}
-```
-
-### 音频块大小
-
-200ms 的 16kHz 16bit 单声道 PCM = 6400 字节
-
-### 环境变量
+## 环境变量
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| `volcengine_asr_api_key` | 火山引擎 API Key（新版控制台） | （必填） |
+| `volcengine_asr_api_key` | 火山 API Key（新版控制台） | （必填） |
 | `volcengine_asr_resource_id` | 资源 ID | `volc.bigasr.sauc.duration` |
 | `volcengine_asr_app_id` | App ID（旧版控制台） | （可选） |
 | `volcengine_asr_access_token` | Access Token（旧版控制台） | （可选） |
 
-## 配置方式
-
-### 方式一：Settings 页面配置（推荐）
-
-1. 进入 **Settings → Voice Transcription**
-2. 在 **Volcengine ASR Configuration** 卡片中点击"Edit"填入 API Key
-3. 点击"Save"保存
-4. 点击"Test Connection"验证连通性 — 测试成功后录音按钮才可用
-5. 在 **Shortcut Settings** 中配置快捷键和触发模式（可选）
-
-> 页面加载时自动将 `transcription_provider_type` 设为 `volcengine_bigmodel`，无需手动选择。
-
-### 方式二：环境变量配置
-
-在 `.env` 或系统环境变量中设置：
+## 构建与验证
 
 ```bash
-VOLCENGINE_ASR_API_KEY=your-api-key
-VOLCENGINE_ASR_RESOURCE_ID=volc.bigasr.sauc.duration
-VOLCENGINE_ASR_APP_ID=your-app-id        # 旧版控制台
-VOLCENGINE_ASR_ACCESS_TOKEN=your-token    # 旧版控制台
+# 前端 bundle
+cd plugins/apps/qwenpaw-voice/frontend
+npm install && npm run build      # → dist/index.js（ESM，自包含）
+
+# 校验无裸 import（关键）
+grep -E '^import' dist/index.js   # 应为空
+
+# 后端插件加载
+python -c "
+import asyncio, tempfile, shutil
+from pathlib import Path
+from fastapi import FastAPI
+from qwenpaw.plugins.loader import PluginLoader
+from qwenpaw.plugins.registry import PluginRegistry
+async def m():
+    app = FastAPI(); PluginRegistry().set_plugin_http_app(app)
+    tmp = Path(tempfile.mkdtemp())
+    shutil.copytree(Path('plugins/apps/qwenpaw-voice'), tmp/'qwenpaw-voice')
+    print(await PluginLoader([tmp]).load_all_plugins())
+asyncio.run(m())"
+
+# Console 类型检查 + 测试
+cd console && npx tsc -b --noEmit && npx vitest run src/pages/Chat
 ```
-
-然后在 `config.yaml` 中设置：
-
-```yaml
-agents:
-  transcription_provider_type: volcengine_bigmodel
-```
-
-## 使用方式
-
-配置完成并通过连通性测试后，在聊天页面：
-
-1. **点击麦克风按钮** — 开始/停止录音
-2. **使用快捷键** — 根据配置的模式（toggle/hold）控制录音
-3. 录音期间，识别文字会**实时**填入输入框（partial 替换更新）
-4. 停止录音后，最终文字自动填入
-5. **发送消息时**自动停止录音并重置 ASR 会话
-6. 下次语音输入从空白开始
-
-## 技术要点
-
-### 音频处理
-
-- 使用 `ScriptProcessorNode`（4096 buffer）采集浏览器麦克风音频
-- 原始采样率（通常 44100Hz/48000Hz）重采样为 **16000Hz**（线性插值）
-- 编码为 **Int16 PCM** 单声道格式（little-endian）
-- 通过 WebSocket 实时发送 Binary Frame
-
-### 流式文字替换策略
-
-前端维护两个 ref 来实现 partial 文本的增量替换：
-- `voiceBaseRef` — 语音开始前输入框中的已有文字
-- `voiceLenRef` — 当前语音已插入的文字长度
-
-**partial 更新：** 保留 `voiceBaseRef` 前缀，替换 `voiceLenRef` 长度的语音部分为新 partial 文本。
-**final 更新：** 保留 `voiceBaseRef` 前缀，追加最终文本，重置 `voiceLenRef = 0`。
-
-### 连接管理
-
-- WebSocket 连接在每次录音时建立，录音结束后关闭
-- 支持异常断开自动清理（`cleanup` 函数）
-- 最大录音时长 5 分钟（前端计时器保护）
-- 发送消息时自动停止录音 + `resetSession()` 清空 ASR 会话
-
-### 配置持久化
-
-- Tauri 桌面应用每次启动可能使用不同端口
-- `localStorage` 基于 origin，端口变化会丢失数据
-- `clientConfig.ts` 通过后端文件存储（`~/.clipaw/client-config.json`）解决此问题
-- App 启动时自动调用 `loadClientConfig()` 恢复配置到 localStorage
-- `SYNC_KEYS` 集合控制哪些 key 需要跨端口同步
-
-### 凭证读取优先级
-
-后端 `_get_volcengine_creds_full()` 按以下顺序读取凭证：
-1. **envs store**（Settings 页面保存的环境变量）— 优先
-2. **系统环境变量**（`VOLCENGINE_ASR_*`）— 回退
-
-支持两种鉴权方式：
-- 新版控制台：`api_key` → `X-Api-Key` header
-- 旧版控制台：`app_id` + `access_token` → `X-Api-App-Key` + `X-Api-Access-Key` headers
-
-### SSL 证书
-
-- `_build_volcengine_ssl_ctx()` 创建跳过证书验证的 SSL 上下文
-- 原因：桌面端常运行在企业代理后，代理注入的自签名证书会导致默认验证失败
 
 ## 注意事项
 
-1. **websockets 依赖**：后端需要安装 `websockets` Python 库（`uv pip install websockets`）
-2. **ffmpeg 依赖**：一次性转写模式需要系统安装 ffmpeg
-3. **连通性测试**：用户必须先通过连通性测试才能使用语音输入，未测试时录音按钮禁用
-4. **自动 provider 设置**：设置页面加载时自动将 provider type 设为 `volcengine_bigmodel`，确保 WebSocket 流式路径默认激活
-5. **ScriptProcessorNode 弃用警告**：当前使用 `ScriptProcessorNode`（已标记 deprecated），未来可考虑迁移到 `AudioWorkletNode`，但兼容性更好
-6. **partial 文本质量**：火山引擎返回的 partial 是累积文本（非增量），前端直接替换语音部分即可
-7. **RESET 信号**：前端发送消息后调用 `resetSession()`，后端关闭当前 ASR 会话并创建新会话，确保下次语音输入从空白开始
-8. **Agent 持久化**：选择 Agent 时同时持久化到后端配置文件（`PUT /agents/active`）和 client-config，解决 Tauri 端口变化后 Agent 选择丢失的问题
+1. **`websockets` 依赖**：插件 `plugin.json` 声明，`backend/volcengine_asr.py` 需该库
+2. **ffmpeg**：仅一次性转写模式（上游能力）需要
+3. **连通性测试**：用户须先在插件设置页通过测试，未测试时麦克风按钮禁用
+4. **ScriptProcessorNode 已弃用**：当前仍用（兼容性好），未来可迁 AudioWorkletNode
+5. **partial 是累积全文**：前端必须替换语音段而非追加（`voiceBaseRef`/`voiceLenRef`）
+6. **总开关与内置语音互斥**：插件开启时 `allowSpeech` 禁用、内置 Whisper 按钮
+   让位；关闭时恢复官方默认（`allowSpeech: !pluginVoiceOn && whisperChecked && !whisperEnabled`）
+7. **回退路径测试已恢复**：`ChatPage.coverage.test.tsx` /
+   `sdkHostIntegration.test.tsx` 中「内置 whisper 按钮」4 个用例恢复运行
+   （用例内设 `qwenpaw_voice_enabled="0"` 验证回退），并新增 1 个
+   「插件开启时内置按钮让位」反向用例，双向覆盖开关
 
 ## 变更历史
 
 | 日期 | 变更内容 |
 |------|---------|
 | 2026-06-18 | 初始实现：Whisper API + Local Whisper 一次性转写 |
-| 2026-07-02 | 新增火山引擎 BigModel 流式 ASR：WebSocket 实时转写、二进制帧协议、连通性测试、快捷键系统（toggle/hold）、客户端配置持久化、流式文字替换策略、发送时自动停止录音+重置会话、Agent 选择持久化 |
+| 2026-07-02 | 新增火山引擎 BigModel 流式 ASR、快捷键、client-config、流式替换策略 |
+| 2026-09-28 | **重构为插件架构**：全部代码迁入 `plugins/apps/qwenpaw-voice/`；还原 3 个上游后端文件、`WhisperSpeechButton`、设置页；Chat 仅保留扩展槽渲染 |
+| 2026-09-28 | **移除全自动语音交互功能**：删除 `useAutoVoice.ts` / `AutoVoiceIndicator.tsx` 及设置页对应卡片、配置键 `qwenpaw_auto_voice`、相关 i18n 文案 |
+| 2026-09-28 | **更名「语音输入」+ 菜单麦克风图标**（`AudioOutlined`，同 background-theme 的 `menu.add` icon 模式） |
+| 2026-09-28 | **新增实时语音总开关**：`qwenpaw_voice_enabled`（默认开）+ 设置页开关卡片 + `qwenpaw-voice-change` 同 tab 事件；Chat 恢复上游内置语音块并加 `pluginVoiceOn` 门控，关闭时回退官方 `WhisperSpeechButton` / `allowSpeech` |
+| 2026-09-29 | **v1.2.0**：插件麦克风图标换官方 `SparkMicLine` 逐字复刻并固定 prefix 行首（开关切换位置/外观不变）；`loadClientConfig` 恢复后补广播事件（重启持久化闭环）；`_sync_bundled_plugins` 改版本感知重同步并排除 node_modules；插件麦克风渲染顺序移至 `pluginSenderPrefix` 第一项 |
+| 2026-09-29 | **v1.3.0**：图标改 `span.qpv-spark-icon` + 官方 svg 路径逐字复刻（注入同款 `.spark-icon` CSS），按钮内联样式对齐 design 库 Button（`fontWeight:500, lineHeight:1`，去掉自定义 padding）——开/关对输入框完全无感知；同步补齐 `copytree(dirs_exist_ok=True)` 兜底；重新构建并同步 console 产物至 `src/qwenpaw/console` |
+| 2026-09-29 | **v1.4.0**：按钮补官方 class `qwenpaw-sender-actions-btn`（Chat less 据此设 44×44/圆角12px —— 此前"图标偏小"的根因）/ `qwenpaw-spark-icon-button` / `spark-button`；图标包裹改回官方类名 `spark-icon spark-icon-spark-mic-line` + `data-spark-icon`（弃用自注入 `qpv-spark-icon`，console 已有全局 CSS）；svg 补 `overflow="hidden"`。DOM 以生产真实渲染为基准逐字段核对一致 |
+| 2026-09-29 | **v1.5.0**：**彻底解决开/关按钮位置不一致** —— 根因：SDK 把 prefix 内容渲染在附件按钮之后，插件麦克风（prefix 槽）永远在附件后；而 SDK 语音按钮（`allowSpeech`）在附件前。方案：插件开启时 `allowSpeech=true`（SDK 语音按钮始终显示在附件前），插件渲染**隐藏的 SpeechButton**（提供流式录音逻辑）+ **捕获阶段劫持 SDK 语音按钮点击**（`stopPropagation` → 调 `speechRef.toggleRecording()`）+ **录音状态反馈**（`setInterval` 轮询状态 → 给 SDK 按钮 `style.color`）。开/关时可见麦克风始终是 SDK 原生的那个（位置、尺寸、图标、class 全一致） |

@@ -2487,15 +2487,13 @@ class AgentsConfig(BaseModel):
         "disabled",
         "whisper_api",
         "local_whisper",
-        "volcengine_bigmodel",
     ] = Field(
         default="disabled",
         description=(
             "Transcription backend. "
             '"disabled": no transcription; '
             '"whisper_api": remote OpenAI-compatible endpoint; '
-            '"local_whisper": locally installed openai-whisper; '
-            '"volcengine_bigmodel": Volcengine streaming ASR.'
+            '"local_whisper": locally installed openai-whisper.'
         ),
     )
     transcription_provider_id: str = Field(

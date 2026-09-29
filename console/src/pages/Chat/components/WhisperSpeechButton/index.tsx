@@ -10,30 +10,23 @@ import { SparkMicLine } from "@agentscope-ai/icons";
 import { Tooltip, message } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { getApiUrl } from "@/api/config";
-import {
-  isVoiceConnected,
-} from "@/pages/Settings/VoiceTranscription/components/VolcengineConfigCard";
+import { agentApi, TranscriptionError } from "@/api/modules/agent";
+import { useUploadLimitStore } from "@/stores/uploadLimitStore";
 
 const MAX_RECORDING_DURATION_MS = 5 * 60 * 1000; // 5 minutes
-const TARGET_SAMPLE_RATE = 16000;
 
 export interface WhisperSpeechButtonRef {
   toggleRecording: () => void;
   isRecording: () => boolean;
   isLoading: () => boolean;
-  /** Reset the ASR session — discard accumulated text, start fresh. */
-  resetSession: () => void;
 }
 
 interface WhisperSpeechButtonProps {
   disabled?: boolean;
-  onTranscription: (text: string, isPartial?: boolean) => void;
-  onStart?: () => void;
+  onTranscription: (text: string) => void;
 }
 
-// ── Recording icon (animated bars) ──────────────────────────────────────
-
+// Original recording icon animation from @agentscope-ai/chat
 const SIZE = 1000;
 const COUNT = 4;
 const RECT_WIDTH = 140;
@@ -60,6 +53,7 @@ const RecordingIcon: React.FC<{ className?: string }> = ({ className }) => (
       const x = index * (dest + RECT_WIDTH);
       const yMin = SIZE / 2 - RECT_HEIGHT_MIN / 2;
       const yMax = SIZE / 2 - RECT_HEIGHT_MAX / 2;
+
       return (
         <rect
           fill="currentColor"
@@ -93,284 +87,147 @@ const RecordingIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
-// ── Helpers ─────────────────────────────────────────────────────────────
-
-/** Build ws:// or wss:// URL from the REST API base. */
-function getWsUrl(path: string): string {
-  const apiUrl = getApiUrl(path);
-  if (apiUrl.startsWith("https://")) return apiUrl.replace("https://", "wss://");
-  if (apiUrl.startsWith("http://")) return apiUrl.replace("http://", "ws://");
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}${apiUrl}`;
-}
-
-/**
- * Resample Float32 audio from native sample rate to target (16kHz).
- * Simple linear interpolation — good enough for speech.
- */
-function resampleTo16k(
-  buffer: Float32Array,
-  inputSampleRate: number,
-): Int16Array {
-  if (inputSampleRate === TARGET_SAMPLE_RATE) {
-    const out = new Int16Array(buffer.length);
-    for (let i = 0; i < buffer.length; i++) {
-      out[i] = Math.max(-32768, Math.min(32767, Math.round(buffer[i] * 32767)));
-    }
-    return out;
-  }
-
-  const ratio = inputSampleRate / TARGET_SAMPLE_RATE;
-  const outLen = Math.floor(buffer.length / ratio);
-  const out = new Int16Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const srcIdx = i * ratio;
-    const srcIdxFloor = Math.floor(srcIdx);
-    const srcIdxCeil = Math.min(srcIdxFloor + 1, buffer.length - 1);
-    const t = srcIdx - srcIdxFloor;
-    const val = buffer[srcIdxFloor] * (1 - t) + buffer[srcIdxCeil] * t;
-    out[i] = Math.max(-32768, Math.min(32767, Math.round(val * 32767)));
-  }
-  return out;
-}
-
-/** Convert Int16Array to ArrayBuffer for WebSocket send. */
-function int16ToBuffer(data: Int16Array): ArrayBuffer {
-  const buf = new ArrayBuffer(data.length * 2);
-  const view = new DataView(buf);
-  for (let i = 0; i < data.length; i++) {
-    view.setInt16(i * 2, data[i], true); // little-endian
-  }
-  return buf;
-}
-
-// ── Component ───────────────────────────────────────────────────────────
-
 const WhisperSpeechButton = forwardRef<
   WhisperSpeechButtonRef,
   WhisperSpeechButtonProps
->(({ disabled, onTranscription, onStart }, ref) => {
+>(({ disabled, onTranscription }, ref) => {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [loading, setLoading] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const internalRecordingRef = useRef(false);
   const recordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const finalTextRef = useRef("");
-
-  const cleanup = useCallback(() => {
-    if (recordingTimerRef.current) {
-      clearTimeout(recordingTimerRef.current);
-      recordingTimerRef.current = null;
-    }
-    if (processorRef.current) {
-      try { processorRef.current.disconnect(); } catch { /* ignore */ }
-      processorRef.current = null;
-    }
-    if (audioCtxRef.current) {
-      try { audioCtxRef.current.close(); } catch { /* ignore */ }
-      audioCtxRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    if (wsRef.current) {
-      try {
-        if (wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send("DONE");
-        }
-      } catch { /* ignore */ }
-      try { wsRef.current.close(); } catch { /* ignore */ }
-      wsRef.current = null;
-    }
-    internalRecordingRef.current = false;
-    setRecording(false);
-    setLoading(false);
-  }, []);
 
   const stopRecording = useCallback(() => {
-    if (internalRecordingRef.current) {
+    if (mediaRecorderRef.current && internalRecordingRef.current) {
+      mediaRecorderRef.current.stop();
       internalRecordingRef.current = false;
       setRecording(false);
-      setLoading(true);
-      if (processorRef.current) {
-        try { processorRef.current.disconnect(); } catch { /* ignore */ }
-        processorRef.current = null;
-      }
-      if (audioCtxRef.current) {
-        try { audioCtxRef.current.close(); } catch { /* ignore */ }
-        audioCtxRef.current = null;
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-      }
-      if (recordingTimerRef.current) {
-        clearTimeout(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send("DONE");
-      }
     }
   }, []);
 
   const startRecording = useCallback(async () => {
     if (internalRecordingRef.current || loading) return;
-
-    onStart?.();
-
     try {
-      const wsUrl = getWsUrl("/workspace/transcribe/ws");
-      const ws = new WebSocket(wsUrl);
-      ws.binaryType = "arraybuffer";
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "audio/mp4";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      chunksRef.current = [];
 
-      ws.onopen = async () => {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              channelCount: 1,
-              sampleRate: { ideal: TARGET_SAMPLE_RATE },
-            },
-          });
-          streamRef.current = stream;
-
-          const audioCtx = new AudioContext({
-            sampleRate: stream.getAudioTracks()[0].getSettings().sampleRate,
-          });
-          audioCtxRef.current = audioCtx;
-
-          const source = audioCtx.createMediaStreamSource(stream);
-          const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-          processorRef.current = processor;
-
-          const inputSampleRate = audioCtx.sampleRate;
-
-          processor.onaudioprocess = (e) => {
-            if (!internalRecordingRef.current) return;
-            if (ws.readyState !== WebSocket.OPEN) return;
-            const inputData = e.inputBuffer.getChannelData(0);
-            const pcm = resampleTo16k(inputData, inputSampleRate);
-            const buf = int16ToBuffer(pcm);
-            ws.send(buf);
-          };
-
-          source.connect(processor);
-          processor.connect(audioCtx.destination);
-
-          internalRecordingRef.current = true;
-          setRecording(true);
-
-          recordingTimerRef.current = setTimeout(() => {
-            if (internalRecordingRef.current) {
-              message.warning(
-                t("chat.speech.recordingTooLong", {
-                  limit: MAX_RECORDING_DURATION_MS / 1000,
-                }),
-              );
-              stopRecording();
-            }
-          }, MAX_RECORDING_DURATION_MS);
-        } catch (err) {
-          console.error("Microphone access error:", err);
-          message.error(t("chat.speech.microphoneError"));
-          cleanup();
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunksRef.current.push(e.data);
         }
       };
 
-      ws.onmessage = (event) => {
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        if (recordingTimerRef.current) {
+          clearTimeout(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+
+        // File size validation
+        const sizeMb = blob.size / 1024 / 1024;
+        const uploadLimit = useUploadLimitStore.getState().uploadMaxSizeMb;
+        if (uploadLimit !== null && sizeMb > uploadLimit) {
+          message.error(
+            t("chat.speech.fileTooLarge", {
+              size: sizeMb.toFixed(1),
+              limit: uploadLimit,
+            }),
+          );
+          return;
+        }
+
+        setLoading(true);
         try {
-          const data = JSON.parse(event.data as string);
-          if (data.type === "partial" && data.text) {
-            onTranscription(data.text, true);
-            finalTextRef.current = data.text;
-          } else if (data.type === "final") {
-            if (data.text) {
-              onTranscription(data.text, false);
-              finalTextRef.current = data.text;
-            } else if (finalTextRef.current) {
-              onTranscription(finalTextRef.current, false);
-            }
-            cleanup();
-          } else if (data.type === "error") {
-            message.error(data.message || t("chat.speech.transcriptionFailed"));
-            cleanup();
+          const result = await agentApi.transcribeAudio(blob);
+          if (result.text) {
+            onTranscription(result.text);
           }
-        } catch {
-          // ignore
-        }
-      };
-
-      let hadError = false;
-
-      ws.onerror = () => {
-        hadError = true;
-      };
-
-      ws.onclose = () => {
-        if (loading) {
-          if (finalTextRef.current) {
-            onTranscription(finalTextRef.current, false);
-          } else if (hadError) {
+        } catch (err) {
+          if (err instanceof TranscriptionError) {
+            switch (err.code) {
+              case "TRANSCRIPTION_DISABLED":
+                message.warning(t("chat.speech.transcriptionDisabled"));
+                break;
+              case "FILE_TOO_LARGE":
+                message.error(
+                  t("chat.speech.fileTooLarge", {
+                    size: sizeMb.toFixed(1),
+                    limit: uploadLimit ?? "?",
+                  }),
+                );
+                break;
+              default:
+                message.error(t("chat.speech.transcriptionFailed"));
+            }
+          } else {
             message.error(t("chat.speech.transcriptionFailed"));
           }
+          console.error("Transcription error:", err);
+        } finally {
+          setLoading(false);
         }
-        cleanup();
       };
 
-      wsRef.current = ws;
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      internalRecordingRef.current = true;
+      setRecording(true);
+
+      // Auto-stop after max duration
+      recordingTimerRef.current = setTimeout(() => {
+        if (internalRecordingRef.current) {
+          message.warning(
+            t("chat.speech.recordingTooLong", {
+              limit: MAX_RECORDING_DURATION_MS / 1000,
+            }),
+          );
+          stopRecording();
+        }
+      }, MAX_RECORDING_DURATION_MS);
     } catch (err) {
-      console.error("Microphone setup error:", err);
+      console.error("Microphone access error:", err);
       message.error(t("chat.speech.microphoneError"));
-      cleanup();
     }
-  }, [onTranscription, t, loading, stopRecording, cleanup]);
+  }, [onTranscription, t, loading, stopRecording]);
 
   const toggleRecording = useCallback(() => {
     if (loading) return;
     if (internalRecordingRef.current) {
       stopRecording();
     } else {
-      finalTextRef.current = "";
       startRecording();
     }
   }, [loading, startRecording, stopRecording]);
 
-  const resetSession = useCallback(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      finalTextRef.current = "";
-      wsRef.current.send("RESET");
-    }
-  }, []);
-
+  // Expose methods via ref
   useImperativeHandle(
     ref,
     () => ({
       toggleRecording,
       isRecording: () => internalRecordingRef.current,
       isLoading: () => loading,
-      resetSession,
     }),
-    [toggleRecording, loading, resetSession],
+    [toggleRecording, loading],
   );
 
-  const voiceConnected = isVoiceConnected();
-  const isDisabled = disabled || loading || !voiceConnected;
+  const isDisabled = disabled || loading;
 
   return (
     <Tooltip
       title={
-        !voiceConnected
-          ? t("chat.speech.notConnected")
-          : loading
-            ? t("chat.speech.transcribing")
-            : recording
-              ? t("chat.speech.stopRecording")
-              : t("chat.speech.startRecording")
+        loading
+          ? t("chat.speech.transcribing")
+          : recording
+          ? t("chat.speech.stopRecording")
+          : t("chat.speech.startRecording")
       }
       mouseEnterDelay={0.5}
     >
@@ -385,7 +242,7 @@ const WhisperSpeechButton = forwardRef<
             <SparkMicLine />
           )
         }
-        onClick={voiceConnected ? toggleRecording : undefined}
+        onClick={toggleRecording}
         disabled={isDisabled}
         style={{
           color: recording || loading ? "#1890ff" : undefined,

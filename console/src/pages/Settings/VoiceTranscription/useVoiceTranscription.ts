@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import api from "../../../api";
 import { useAppMessage } from "../../../hooks/useAppMessage";
 
+// ─── Types ──────────────────────────────────────────────────────────────────
+
 export interface TranscriptionProvider {
   id: string;
   name: string;
@@ -15,8 +17,7 @@ export interface LocalWhisperStatus {
   whisper_installed: boolean;
 }
 
-type AudioMode = string;
-type ProviderType = "disabled" | "local_whisper" | "whisper_api" | string;
+// ─── Hook ───────────────────────────────────────────────────────────────────
 
 export function useVoiceTranscription() {
   const { t } = useTranslation();
@@ -24,31 +25,27 @@ export function useVoiceTranscription() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [audioMode, setAudioMode] = useState<AudioMode>("auto");
-  const [providerType, setProviderType] = useState<ProviderType>("disabled");
-  const [selectedProviderId, setSelectedProviderId] = useState<string>("");
-  const [availableProviders, setAvailableProviders] = useState<
-    TranscriptionProvider[]
-  >([]);
+  const [audioMode, setAudioMode] = useState("auto");
+  const [providerType, setProviderType] = useState("disabled");
+  const [providers, setProviders] = useState<TranscriptionProvider[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState("");
   const [localWhisperStatus, setLocalWhisperStatus] =
     useState<LocalWhisperStatus | null>(null);
 
   const fetchSettings = async () => {
     setLoading(true);
     try {
-      const [modeRes, typeRes, providersRes, whisperRes] = await Promise.all([
+      const [modeRes, provTypeRes, provRes, lwStatus] = await Promise.all([
         api.getAudioMode(),
         api.getTranscriptionProviderType(),
         api.getTranscriptionProviders(),
         api.getLocalWhisperStatus(),
       ]);
       setAudioMode(modeRes.audio_mode ?? "auto");
-      setProviderType(typeRes.transcription_provider_type ?? "disabled");
-      setSelectedProviderId(providersRes.configured_provider_id ?? "");
-      setAvailableProviders(
-        (providersRes.providers ?? []).filter((p) => p.available),
-      );
-      setLocalWhisperStatus(whisperRes);
+      setProviderType(provTypeRes.transcription_provider_type ?? "disabled");
+      setProviders(provRes.providers ?? []);
+      setSelectedProviderId(provRes.configured_provider_id ?? "");
+      setLocalWhisperStatus(lwStatus);
     } catch (err) {
       console.error("Failed to load voice transcription settings:", err);
       message.error(t("voiceTranscription.loadFailed"));
@@ -59,21 +56,19 @@ export function useVoiceTranscription() {
 
   useEffect(() => {
     fetchSettings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const showProviderSection = audioMode !== "native";
-  const isLocalWhisper = providerType === "local_whisper";
-  const isWhisperApi = providerType === "whisper_api";
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.updateAudioMode(audioMode);
-      await api.updateTranscriptionProviderType(providerType);
-      if (isWhisperApi && selectedProviderId) {
-        await api.updateTranscriptionProvider(selectedProviderId);
+      const promises: Promise<unknown>[] = [
+        api.updateAudioMode(audioMode),
+        api.updateTranscriptionProviderType(providerType),
+      ];
+      if (providerType === "whisper_api") {
+        promises.push(api.updateTranscriptionProvider(selectedProviderId));
       }
+      await Promise.all(promises);
       message.success(t("voiceTranscription.saveSuccess"));
     } catch (err) {
       console.error("Failed to save voice transcription settings:", err);
@@ -83,20 +78,26 @@ export function useVoiceTranscription() {
     }
   };
 
+  // Derived state
+  const availableProviders = providers.filter((p) => p.available);
+  const showProviderSection = audioMode !== "native";
+  const isLocalWhisper = providerType === "local_whisper";
+  const isWhisperApi = providerType === "whisper_api";
+
   return {
     loading,
     saving,
     audioMode,
+    setAudioMode,
     providerType,
+    setProviderType,
     selectedProviderId,
-    availableProviders,
+    setSelectedProviderId,
     localWhisperStatus,
+    availableProviders,
     showProviderSection,
     isLocalWhisper,
     isWhisperApi,
-    setAudioMode,
-    setProviderType,
-    setSelectedProviderId,
     fetchSettings,
     handleSave,
   };

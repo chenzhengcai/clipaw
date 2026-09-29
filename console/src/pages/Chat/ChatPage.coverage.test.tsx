@@ -2118,7 +2118,10 @@ describe("ChatPage coverage", () => {
   });
 
   // ── Whisper speech button renders when enabled ─────────────────────────
+  // fork(语音输入插件): 插件开关关闭（qwenpaw_voice_enabled="0"）时，
+  // Chat 回退官方内置 WhisperSpeechButton，本组用例验证该回退路径。
   it("renders whisper button when transcription is enabled", async () => {
+    localStorage.setItem("qwenpaw_voice_enabled", "0");
     mockGetTranscriptionProviderType.mockResolvedValueOnce({
       transcription_provider_type: "openai_whisper",
     });
@@ -2131,6 +2134,24 @@ describe("ChatPage coverage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("whisper-btn")).toBeInTheDocument();
     });
+  });
+
+  // fork(语音输入插件): 插件开关开启（默认，键缺省）时，即使配置了
+  // whisper provider，内置按钮也让位——麦克风由插件经 senderPrefix 槽注入。
+  it("hides built-in whisper button while the voice plugin is on", async () => {
+    mockGetTranscriptionProviderType.mockResolvedValueOnce({
+      transcription_provider_type: "openai_whisper",
+    });
+    renderWithProviders(<ChatPage />, {
+      initialEntries: ["/chat/test-session"],
+    });
+    await screen.findByTestId("chat-ui");
+    // 等 provider 探测 Promise 链（then/finally）落定后再断言。
+    await waitFor(() => {
+      expect(mockGetTranscriptionProviderType).toHaveBeenCalled();
+    });
+    await act(async () => {});
+    expect(screen.queryByTestId("whisper-btn")).not.toBeInTheDocument();
   });
 
   // ── /chat/new route creates fresh session ──────────────────────────────
@@ -2313,7 +2334,10 @@ describe("ChatPage coverage", () => {
   });
 
   // ── Ctrl+Shift+M shortcut for voice recording ─────────────────────────
+  // fork(语音输入插件): 插件开关关闭（qwenpaw_voice_enabled="0"）时，
+  // Chat 回退官方内置 WhisperSpeechButton，本组用例验证该回退路径。
   it("Ctrl+Shift+M shortcut triggers whisper recording when enabled", async () => {
+    localStorage.setItem("qwenpaw_voice_enabled", "0");
     mockGetTranscriptionProviderType.mockResolvedValueOnce({
       transcription_provider_type: "openai_whisper",
     });

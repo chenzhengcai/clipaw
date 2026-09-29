@@ -1,17 +1,24 @@
 /**
- * clientConfig.ts — 客户端配置持久化
+ * clientConfig.ts — 客户端配置持久化（fork 专属文件，非上游文件）
  *
  * Tauri 桌面端每次启动可能使用不同端口，localStorage 基于 origin，
  * 端口变化后数据丢失。通过后端文件存储解决此问题。
+ *
+ * 说明：语音相关的同步键（voice_connected / qwenpaw_voice_shortcut /
+ * qwenpaw_voice_shortcut_mode）已随语音功能迁移到
+ * plugins/apps/qwenpaw-voice 插件（插件自带 clientConfig 实现，走
+ * /api/qwenpaw-voice/client-config）。此处仅保留与语音无关的
+ * Agent 选择持久化，供 App 启动时恢复上次使用的 Agent。
+ *
+ * 详见 docs/customs/agent-persistence.md
  */
 import { request } from "./request";
 
-const SYNC_KEYS = new Set([
-  "voice_connected",
-  "qwenpaw_voice_shortcut",
-  "qwenpaw_voice_shortcut_mode",
-  "qwenpaw-last-used-agent",
-]);
+// 客户端配置持久化端点：原先在 /workspace/client-config（已随语音功能迁出），
+// 现由 qwenpaw-voice 插件以同一文件（~/.clipaw/client-config.json）提供服务。
+const CLIENT_CONFIG_URL = "/qwenpaw-voice/client-config";
+
+const SYNC_KEYS = new Set(["qwenpaw-last-used-agent"]);
 
 let _synced = false;
 
@@ -23,7 +30,7 @@ let _synced = false;
 export async function loadClientConfig(): Promise<void> {
   if (_synced) return;
   try {
-    const data = await request<Record<string, unknown>>("/workspace/client-config");
+    const data = await request<Record<string, unknown>>(CLIENT_CONFIG_URL);
     if (data && typeof data === "object") {
       for (const [key, value] of Object.entries(data)) {
         if (SYNC_KEYS.has(key) && value !== undefined && value !== null) {
@@ -35,7 +42,9 @@ export async function loadClientConfig(): Promise<void> {
         try {
           const { useAgentStore } = await import("../stores/agentStore");
           useAgentStore.getState().setSelectedAgent(agentId);
-        } catch { /* agent store not ready */ }
+        } catch {
+          /* agent store not ready */
+        }
       }
     }
   } catch {
@@ -58,30 +67,11 @@ export async function saveClientConfig(
     /* ignore */
   }
   try {
-    await request<Record<string, unknown>>("/workspace/client-config", {
+    await request<Record<string, unknown>>(CLIENT_CONFIG_URL, {
       method: "PUT",
       body: JSON.stringify({ [key]: value }),
     });
   } catch {
     /* non-fatal: backend may be temporarily unavailable */
   }
-}
-
-/** Load a key from localStorage (sync, for component use). */
-export function getClientConfig(key: string): string | null {
-  return localStorage.getItem(key);
-}
-
-/** Remove a key from both localStorage and backend. */
-export function removeClientConfig(key: string): void {
-  try {
-    localStorage.removeItem(key);
-  } catch {
-    /* ignore */
-  }
-  // Best-effort backend removal via PUT with empty value
-  void request<Record<string, unknown>>("/workspace/client-config", {
-    method: "PUT",
-    body: JSON.stringify({ [key]: "" }),
-  }).catch(() => {});
 }

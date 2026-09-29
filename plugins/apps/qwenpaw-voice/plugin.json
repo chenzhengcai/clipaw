@@ -1,0 +1,29 @@
+{
+  "id": "qwenpaw-voice",
+  "name": "语音输入",
+  "version": "1.5.0",
+  "description": "Volcengine BigModel streaming ASR: real-time voice-to-text in chat with configurable shortcuts, a master switch to fall back to the built-in voice input, and connection-tested credential management.",
+  "description_i18n": {
+    "zh-CN": "火山引擎大模型流式语音识别：聊天内实时语音转文字、可配置快捷键、一键回退官方内置语音输入、凭证连通性测试。",
+    "en-US": "Volcengine BigModel streaming ASR: real-time voice-to-text in chat with configurable shortcuts, a master switch to fall back to the built-in voice input, and connection-tested credential management."
+  },
+  "author": "clipaw",
+  "type": "general",
+  "entry": {
+    "backend": "plugin.py",
+    "frontend": "frontend/dist/index.js"
+  },
+  "dependencies": [
+    "websockets>=11.0"
+  ],
+  "qwenpaw_version": {
+    "min": "2.0.0"
+  },
+  "meta": {
+    "category": "voice",
+    "permissions": {
+      "chat": true,
+      "storage": true
+    }
+  }
+}

@@ -141,15 +141,8 @@ export const agentApi = {
       body: JSON.stringify({ agent_id: agentId }),
     }),
 
-  /** Test Volcengine BigModel ASR connectivity. */
-  testVoiceConnection: (credentials?: {
-    api_key?: string;
-    resource_id?: string;
-  }) =>
-    request<{ ok: boolean; error?: string }>("/workspace/voice-test-connection", {
-      method: "POST",
-      body: credentials ? JSON.stringify(credentials) : undefined,
-    }),
+  // fork: 火山引擎连通性测试已迁移到 qwenpaw-voice 插件
+  // （插件内 apiFetch("/qwenpaw-voice/voice-test-connection")）
 
   transcribeAudio: async (file: File | Blob): Promise<{ text: string }> => {
     const formData = new FormData();

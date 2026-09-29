@@ -54,6 +54,7 @@ import {
 } from "../../utils/clientMessageId";
 import defaultConfig, { getDefaultConfig } from "./OptionsPanel/defaultConfig";
 import { chatApi } from "../../api/modules/chat";
+import { agentApi } from "../../api/modules/agent";
 import { skillApi } from "../../api/modules/skill";
 import { getApiUrl } from "../../api/config";
 import { buildAuthHeaders } from "../../api/authHeaders";
@@ -205,8 +206,12 @@ function resolveBackendChatId(chatId?: string | null): string | undefined {
     : undefined;
 }
 
-import WhisperSpeechButton from "./components/WhisperSpeechButton";
-import { useVoiceChatInput } from "./voice/useVoiceChatInput";
+import WhisperSpeechButton, {
+  WhisperSpeechButtonRef,
+} from "./components/WhisperSpeechButton";
+// fork(语音输入插件): 官方内置 WhisperSpeechButton 保留。qwenpaw-voice 插件
+// 默认用实时流式语音；当插件开关关闭（qwenpaw_voice_enabled === "0"）时，
+// 回退到这里的官方内置语音输入。
 
 import {
   toDisplayUrl,
@@ -2314,15 +2319,56 @@ export default function ChatPage() {
   }, [fetchMultimodalCaps]);
 
   const pendingClearHistoryRef = useRef(false);
-  // fork: 语音输入集成主体在 ./voice/useVoiceChatInput（避免上游冲突面）
-  const {
-    whisperSpeechRef,
-    whisperEnabled,
-    whisperChecked,
-    handleWhisperTranscription,
-    voiceOnStart,
-    stopVoiceOnSubmit,
-  } = useVoiceChatInput({ isChatActive });
+  const whisperSpeechRef = useRef<WhisperSpeechButtonRef>(null);
+  const [whisperEnabled, setWhisperEnabled] = useState(false);
+  const [whisperChecked, setWhisperChecked] = useState(false);
+  // fork(语音输入插件): qwenpaw-voice 实时语音开关，默认开启。
+  // 开启 → 插件麦克风（senderPrefix 槽）；关闭 → 官方内置语音
+  // （WhisperSpeechButton + allowSpeech）。
+  const [pluginVoiceOn, setPluginVoiceOn] = useState(
+    () => localStorage.getItem("qwenpaw_voice_enabled") !== "0",
+  );
+
+  // Check if Whisper transcription is configured
+  useEffect(() => {
+    agentApi
+      .getTranscriptionProviderType()
+      .then((res) => {
+        setWhisperEnabled(res.transcription_provider_type !== "disabled");
+      })
+      .catch(() => setWhisperEnabled(false))
+      .finally(() => setWhisperChecked(true));
+  }, []);
+
+  // fork(语音输入插件): 同步插件语音开关。设置页与本页同属一个 SPA，
+  // storage 事件只跨 tab 触发，故插件切换时额外派发
+  // "qwenpaw-voice-change" 自定义事件实现同 tab 通知。
+  useEffect(() => {
+    const readFlag = () =>
+      setPluginVoiceOn(localStorage.getItem("qwenpaw_voice_enabled") !== "0");
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "qwenpaw_voice_enabled") readFlag();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("qwenpaw-voice-change", readFlag);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("qwenpaw-voice-change", readFlag);
+    };
+  }, []);
+
+  const handleWhisperTranscription = useCallback((text: string) => {
+    const senderContainer = document.querySelector('[class*="sender"]');
+    const textarea = senderContainer?.querySelector(
+      "textarea",
+    ) as HTMLTextAreaElement | null;
+    if (textarea) {
+      const currentValue = textarea.value || "";
+      const newValue = currentValue ? `${currentValue} ${text}` : text;
+      setTextareaValue(textarea, newValue);
+      textarea.focus();
+    }
+  }, []);
 
   useMessageHistoryNavigation(chatRef, isChatActive, isComposingRef);
   useChatInputDraft(isChatActiveRef.current, selectedAgent);
@@ -2711,7 +2757,27 @@ export default function ChatPage() {
     [chatId, dispatchFilesDrawer, selectedAgent],
   );
 
-  // fork: 语音快捷键（toggle/hold）由 useVoiceChatInput 内部注册
+  // Shortcut key for voice recording (Ctrl+Shift+M or Cmd+Shift+M on Mac)
+  // fork(语音输入插件): 插件实时语音开启时由此让位——插件自己注册可配置
+  // 快捷键（toggle/hold）；仅插件关闭时才走这里的内置 Ctrl/Cmd+Shift+M。
+  useEffect(() => {
+    const handleShortcut = (e: KeyboardEvent) => {
+      if (!isChatActive()) return;
+      // Check for Ctrl+Shift+M (Windows/Linux) or Cmd+Shift+M on Mac)
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        e.shiftKey &&
+        e.key.toLowerCase() === "m"
+      ) {
+        e.preventDefault();
+        if (whisperEnabled && !pluginVoiceOn) {
+          whisperSpeechRef.current?.toggleRecording();
+        }
+      }
+    };
+    document.addEventListener("keydown", handleShortcut);
+    return () => document.removeEventListener("keydown", handleShortcut);
+  }, [isChatActive, whisperEnabled, pluginVoiceOn]);
   chatIdRef.current = chatId;
   navigateRef.current = navigate;
 
@@ -3614,9 +3680,9 @@ export default function ChatPage() {
             backendChatId,
           );
         }
-        // fork: 停止语音录音并重置 ASR 会话（voice/useVoiceChatInput）
-        stopVoiceOnSubmit();
         // Let the SDK clear precisely the enqueued input/attachment revision.
+        // (Voice stop-on-submit is handled by the qwenpaw-voice plugin's own
+        // capture-phase listener, so no call site is needed here.)
         return { proceed: false, clear: sameVisit };
       }
 
@@ -3634,8 +3700,8 @@ export default function ChatPage() {
         data.session_id || chatIdRef.current || "",
       );
 
-      // fork: 停止语音录音并重置 ASR 会话（voice/useVoiceChatInput）
-      stopVoiceOnSubmit();
+      // (Voice stop-on-submit is handled by the qwenpaw-voice plugin's own
+      // capture-phase listener, so no call site is needed here.)
 
       return {
         proceed: true,
@@ -3942,7 +4008,10 @@ export default function ChatPage() {
       sender: {
         ...(i18nConfig as any)?.sender,
         beforeSubmit: handleBeforeSubmit,
-        allowSpeech: whisperChecked && !whisperEnabled,
+        // fork(语音输入插件): 插件开启时 SDK 语音按钮始终显示（位置在附件
+        // 之前，与关闭时完全一致），插件通过捕获阶段拦截其点击走流式录音；
+        // 关闭时恢复官方默认公式。
+        allowSpeech: pluginVoiceOn || (whisperChecked && !whisperEnabled),
         beforeUI: showSenderBeforeUI ? (
           <>
             {isQueueOnlyTab && (
@@ -3969,11 +4038,15 @@ export default function ChatPage() {
         ) : undefined,
         prefix: (
           <>
-            {whisperEnabled ? (
+            {/* fork(语音输入插件): VoiceSenderPrefix 经 senderPrefix 槽挂载，
+                渲染一个隐藏的 SpeechButton（提供录音逻辑）+ 劫持 SDK 语音
+                按钮点击。可见麦克风始终是 SDK 原生的（allowSpeech=true），
+                开/关对输入栏完全无感知。 */}
+            {pluginSenderPrefix}
+            {whisperEnabled && !pluginVoiceOn ? (
               <WhisperSpeechButton
                 ref={whisperSpeechRef}
                 onTranscription={handleWhisperTranscription}
-                onStart={voiceOnStart}
               />
             ) : null}
             {usesQwenPawBackend && (
@@ -3991,7 +4064,6 @@ export default function ChatPage() {
             ) : backendCapabilities?.model_selection ? (
               <HarnessModelSelector providerId={selectedAgentBackend} />
             ) : null}
-            {pluginSenderPrefix}
           </>
         ),
         actionAffix: (
@@ -4401,9 +4473,8 @@ export default function ChatPage() {
     onFileCardClick,
     whisperChecked,
     whisperEnabled,
+    pluginVoiceOn,
     handleWhisperTranscription,
-    stopVoiceOnSubmit,
-    voiceOnStart,
     isWideMode,
     hasQueueItems,
     isQueueOnlyTab,

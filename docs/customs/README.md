@@ -8,7 +8,7 @@
 
 | 文档 | 内容 | 创建日期 | 最新更新 |
 |------|------|---------|---------|
-| [voice-transcription.md](./voice-transcription.md) | 语音转写功能 — 三种 ASR 后端架构、WebSocket 流式设计、前端组件树 | 2026-06-19 | 2026-06-19 |
+| [voice-transcription.md](./voice-transcription.md) | 语音输入 — **插件化架构**（`plugins/apps/qwenpaw-voice/`），火山引擎流式 ASR、快捷键、一键回退官方内置语音的总开关、近零上游冲突 | 2026-06-19 | 2026-09-28 |
 | [token-usage-chart-smooth.md](./token-usage-chart-smooth.md) | Token 消耗折线图圆滑曲线修复 — @ant-design/plots v2 API 迁移适配 | 2026-06-19 | 2026-06-19 |
 | [tauri-desktop-build.md](./tauri-desktop-build.md) | Tauri 桌面端打包 — 麦克风权限修复、PyInstaller 脚本修复、GitHub Actions 精简 | 2026-06-19 | 2026-06-19 |
 | [agent-persistence.md](./agent-persistence.md) | Agent 选择持久化 — 三层存储链路，跨重启记住上次使用的 Agent | 2026-06-19 | 2026-06-20 |
@@ -21,7 +21,7 @@
 
 | 关键词 | 文档 |
 |--------|------|
-| `语音`, `voice`, `transcription`, `whisper`, `volcengine`, `ASR`, `WebSocket`, `录音`, `microphone`, `快捷键`, `push-to-talk` | [voice-transcription.md](./voice-transcription.md) |
+| `语音`, `voice`, `transcription`, `whisper`, `volcengine`, `ASR`, `WebSocket`, `录音`, `microphone`, `快捷键`, `push-to-talk`, `qwenpaw-voice`, `插件化`, `plugin`, `senderPrefix`, `AWE`, `blob import` | [voice-transcription.md](./voice-transcription.md) |
 | `折线图`, `chart`, `smooth`, `曲线`, `token usage`, `plots`, `Line`, `G2Plot`, `shape`, `Trend` | [token-usage-chart-smooth.md](./token-usage-chart-smooth.md) |
 | `turn_usage`, `context_usage`, `console`, `环形`, `token`, `上下文`, `占比`, `AgentScope 2.0`, `session.state`, `memory_state`, `async_generator` | [token-usage-console-fix.md](./token-usage-console-fix.md) |
 | `语音重复`, `逐字重复`, `流式重复`, `快捷键失效`, `voiceBaseRef`, `voiceLenRef`, `voiceSessionActiveRef`, `matchShortcut`, `qwenpaw_voice_shortcut`, `发送不停止录音`, `handleWhisperTranscription`, `resetSession` | [voice-streaming-replace-regression.md](./voice-streaming-replace-regression.md) |
