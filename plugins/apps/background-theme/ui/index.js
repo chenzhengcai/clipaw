@@ -390,6 +390,13 @@ body.qwp-bg-global-on [class*='sidebarSessionList-module__stickyGroupHeader__'] 
   border-radius: 12px;
 }
 
+body.qwp-bg-global-on [class*='dockableSidebar-module'] {
+  border-radius: 20px !important;
+  background: transparent !important;
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
 
 
 
