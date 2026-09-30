@@ -119,7 +119,15 @@ function VoiceSenderPrefix() {
     let holdActive = false;
 
     const isChatScope = () => {
-      const p = window.location.pathname;
+      // Strip the "/console" router basename first: in the packaged Tauri
+      // desktop app the webview navigates to the backend-hosted console
+      // (http://127.0.0.1:<port>/console/chat/...), so the raw pathname
+      // starts with "/console" — without stripping, this check (and the
+      // shortcut with it) silently dies in the desktop build while working
+      // in the browser (root-served SPA, pathname "/chat/..."). The host
+      // ChatPage uses react-router's location, which already strips the
+      // basename — that's why the built-in shortcut keeps working.
+      const p = window.location.pathname.replace(/^\/console(?=\/|$)/, "");
       return p.startsWith("/chat") || p.startsWith("/coding");
     };
 

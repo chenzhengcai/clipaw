@@ -98,7 +98,12 @@ def test_file_input_preserves_independent_original_content():
     assert saved[1]["file_url"] == "/tmp/original.txt"
     assert saved[1]["file_name"] == "original.txt"
     assert saved[1]["file_size"] == 42
-    assert converted.content[1].type == "data"
+    # fork(file-attachment): upstream asserts "data" here (DataBlock with
+    # application/octet-stream). CliPaw intentionally converts file content
+    # to a TextBlock because formatters silently drop the DataBlock — see
+    # docs/customs/file-attachment-not-visible-to-model.md. On a main merge,
+    # keep "text" unless the upstream fix lands.
+    assert converted.content[1].type == "text"
 
 
 def test_text_input_cannot_supply_original_content_override():
@@ -117,3 +122,97 @@ def test_text_input_cannot_supply_original_content_override():
     )
 
     assert QWENPAW_USER_CONTENT_KEY not in converted.metadata
+
+
+# ---------------------------------------------------------------------------
+# fork(file-attachment): file content becomes a TextBlock instead of a
+# DataBlock("application/octet-stream") that formatters silently drop.
+# See docs/customs/file-attachment-not-visible-to-model.md. These tests were
+# originally lost in a main merge — restored and kept in sync with
+# `_file_content_to_text_block` in src/qwenpaw/runtime/message_convert.py.
+# ---------------------------------------------------------------------------
+
+
+def test_file_attachment_preview_url_becomes_text_with_local_path():
+    [converted] = _request_input_to_msgs(
+        [
+            Message(
+                role=Role.USER,
+                content=[
+                    FileContent(
+                        file_url=(
+                            "http://127.0.0.1:8765/files/preview"
+                            "/Users/demo/data/media/report.pdf"
+                        ),
+                        file_name="report.pdf",
+                        file_size=1024,
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    block = converted.content[0]
+    assert block.type == "text"
+    assert "File 'report.pdf' is available at:" in block.text
+    assert "/Users/demo/data/media/report.pdf" in block.text
+
+
+def test_file_attachment_absolute_path_becomes_text_with_path():
+    [converted] = _request_input_to_msgs(
+        [
+            Message(
+                role=Role.USER,
+                content=[
+                    FileContent(
+                        file_url="/tmp/notes.txt",
+                        file_name="notes.txt",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    block = converted.content[0]
+    assert block.type == "text"
+    assert block.text == "File 'notes.txt' is available at: /tmp/notes.txt"
+
+
+def test_file_attachment_file_scheme_becomes_text_with_path():
+    [converted] = _request_input_to_msgs(
+        [
+            Message(
+                role=Role.USER,
+                content=[
+                    FileContent(
+                        file_url="file:///tmp/report.docx",
+                        file_name="report.docx",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    block = converted.content[0]
+    assert block.type == "text"
+    assert block.text == "File 'report.docx' is available at: /tmp/report.docx"
+
+
+def test_file_attachment_unresolvable_url_becomes_text_with_filename_only():
+    [converted] = _request_input_to_msgs(
+        [
+            Message(
+                role=Role.USER,
+                content=[
+                    FileContent(
+                        file_url="https://example.com/download?id=42",
+                        file_name="doc.pdf",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    block = converted.content[0]
+    assert block.type == "text"
+    assert block.text == "File 'doc.pdf'"

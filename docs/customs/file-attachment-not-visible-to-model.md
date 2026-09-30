@@ -1,5 +1,22 @@
 # Bugfix：文件附件发送后 AI 看不到附件内容
 
+## 2026 上游复查（main 77744172）
+
+官方根因**仍未修复**：`_request_input_to_msgs` 的 file 分支仍硬编码 `DataBlock(media_type="application/octet-stream")`。
+
+但官方生态有两处相关演进（值得跟进，但不构成解决）：
+
+1. **agentscope formatter 已原生支持 `application/pdf`**（`_format_openai_data_block` → `_format_file_source`，base64 inline）。若上游把 media_type 从硬编码改为按文件名猜测，PDF 附件即可走原生通道；目前 octet-stream 仍被丢弃。
+2. **`_fixup_media_list` 的 `btype == "file"` 分支**已实现与本修复**完全同格式**的 TextBlock 兜底（`File 'x' is available at: path`），但该分支只覆盖 file 类型 block（1.x 会话/工具产物），覆盖不到 console 上传链路产出的 DataBlock。
+
+**结论：本修复仍然必要，且兜底格式与官方方向一致。**
+
+**冲突面收敛（已完成）**：
+- file 分支 27 行内联代码抽为模块级 helper `_file_content_to_text_block()`，分支内仅剩 1 行调用
+- 上游测试 `test_file_input_preserves_independent_original_content` 的断言 `type == "data"` 改为 `"text"`（本修复改变转换语义，断言须随行；已加 fork 注释）
+- 4 个曾在某次 merge main 中丢失的测试已恢复（见下方 4.2 节）
+- 验证：`pytest tests/unit/runtime/test_message_convert.py` 9/9 通过
+
 ## 状态
 
 - 确认存在：✅

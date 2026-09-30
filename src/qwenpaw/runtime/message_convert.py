@@ -117,6 +117,40 @@ def _file_url_to_local_path(url: str) -> str | None:
     return None
 
 
+def _file_content_to_text_block(c: Any, url: str) -> Any:
+    """Convert a non-media file attachment into a text block (fork fix).
+
+    Upstream turns ``FileContent`` into
+    ``DataBlock(media_type="application/octet-stream")``, which no formatter
+    supports (only ``image/*``, ``audio/*``, and — in newer agentscope —
+    ``application/pdf`` are accepted), so the block is silently dropped and
+    the model never sees the attachment. Converting to a text block with the
+    local path keeps the file visible and lets the model read it via
+    ``file_io``.
+
+    Kept as a standalone helper (instead of inline code in
+    ``_request_input_to_msgs``) to minimize the fork diff inside that
+    hot upstream function. See
+    ``docs/customs/file-attachment-not-visible-to-model.md``.
+    """
+    # Local import mirroring _request_input_to_msgs (agentscope may be
+    # absent in degraded environments; callers treat the block as optional).
+    from agentscope.message import TextBlock
+
+    local_path = _file_url_to_local_path(url)
+    filename = (
+        getattr(c, "file_name", None)
+        or getattr(c, "filename", None)
+        or (local_path.rsplit("/", 1)[-1] if local_path else "file")
+    )
+    if local_path:
+        return TextBlock(
+            type="text",
+            text=f"File '{filename}' is available at: {local_path}",
+        )
+    return TextBlock(type="text", text=f"File '{filename}'")
+
+
 # pylint: disable=too-many-branches
 def _request_input_to_msgs(
     input_list: List[Any],
@@ -200,30 +234,10 @@ def _request_input_to_msgs(
             elif ctype == "file":
                 url = getattr(c, "file_url", None) or getattr(c, "url", None)
                 if url:
-                    local_path = _file_url_to_local_path(str(url))
-                    filename = (
-                        getattr(c, "file_name", None)
-                        or getattr(c, "filename", None)
-                        or (local_path.rsplit("/", 1)[-1]
-                            if local_path else "file")
-                    )
-                    if local_path:
-                        blocks.append(
-                            TextBlock(
-                                type="text",
-                                text=(
-                                    f"File '{filename}' is available at: "
-                                    f"{local_path}"
-                                ),
-                            ),
-                        )
-                    else:
-                        blocks.append(
-                            TextBlock(
-                                type="text",
-                                text=f"File '{filename}'",
-                            ),
-                        )
+                    # fork(file-attachment): upstream builds a
+                    # DataBlock(octet-stream) here which formatters silently
+                    # drop — see _file_content_to_text_block for rationale.
+                    blocks.append(_file_content_to_text_block(c, str(url)))
 
         if not blocks:
             continue

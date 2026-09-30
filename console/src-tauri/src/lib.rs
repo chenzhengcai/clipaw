@@ -8,6 +8,9 @@ mod computer_use_protocol;
 mod computer_use_runtime;
 mod external_link;
 mod runtime_env;
+// Fork-only module: desktop shutdown orchestration (detached-thread cleanup,
+// process-tree kill). See shutdown.rs header for why it is separate.
+mod shutdown;
 mod tray;
 mod updates;
 #[cfg(windows)]
@@ -56,6 +59,7 @@ pub fn run() {
         .manage(backend::BackendState::default())
         .manage(computer_use_runtime::ComputerUseRuntimeState::default())
         .manage(tray::TrayState::default())
+        .manage(shutdown::ShutdownState::default())
         .setup(|app| {
             backend::setup(app)?;
             tray::setup(app)?;
@@ -120,7 +124,7 @@ pub fn run() {
                     // system logout). We join the thread so the process does
                     // not exit mid-cleanup; if the join times out, we abandon
                     // it and let the process exit.
-                    if !tray::shutdown_initiated(app_handle) {
+                    if !shutdown::initiated(app_handle) {
                         if let Err(err) =
                             tauri::async_runtime::block_on(backend::stop_and_wait(app_handle))
                         {
@@ -128,7 +132,7 @@ pub fn run() {
                         }
                         computer_use_runtime::stop(app_handle);
                     } else {
-                        tray::join_shutdown_thread(app_handle);
+                        shutdown::join_shutdown_thread(app_handle);
                     }
                 }
                 // macOS emits this when the user clicks the Dock icon. Without
@@ -145,7 +149,7 @@ pub fn run() {
                     // chance to stop the backend sidecar before the process
                     // exits and orphans it. Without this, the detached
                     // shutdown thread is killed mid-cleanup.
-                    tray::exit_cleanup_blocking(app_handle);
+                    shutdown::exit_cleanup_blocking(app_handle);
                 }
                 _ => {}
             });

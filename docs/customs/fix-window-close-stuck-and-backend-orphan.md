@@ -1,5 +1,25 @@
 # 修复窗口退出卡死与 macOS 后端进程残留
 
+## 2026 上游复查（main 77744172）
+
+官方仍未修复本文件描述的任何问题：
+
+- `exit_app` 仍是 `tauri::async_runtime::spawn` + 60s `stop_and_wait` 后 `app.exit(0)`——窗口在清理期间保持可见（Windows 卡死根因仍在）
+- `ExitRequested` 仍是无条件 `block_on(stop_and_wait)`，无 `shutdown_initiated` 守卫（IPC 冻结根因仍在）
+- 无 `RunEvent::Exit` 处理、无 `force_kill_sidecar`、无进程树清理（macOS 孤儿根因仍在）
+
+**结论：本修复仍然必要。**
+
+**冲突面收敛（已完成）**：本修复的全部实现已从 `tray.rs` / `backend.rs` / `lib.rs` 迁出，集中到 fork 专属新文件 `console/src-tauri/src/shutdown.rs`：
+
+| 原位置 | 现状 |
+|---|---|
+| `tray.rs` `exit_app`（+267 行） | 1 行委托 `shutdown::begin_exit`；`TrayState` 回归上游原样 |
+| `backend.rs` `force_kill_sidecar` / `kill_process_tree_macos`（+109 行） | 迁入 shutdown.rs；backend.rs 仅剩 `pub(crate)` 前缀 ×2 + `sidecar_pid()` |
+| `lib.rs` `ExitRequested`/`Exit` 改造 | 保留接线（`shutdown::initiated` / `join_shutdown_thread` / `exit_cleanup_blocking`），另加 `mod shutdown;` 与 `.manage(ShutdownState::default())` |
+
+验证：`cargo check` 通过无警告。上游若最终修复退出问题：删除 `shutdown.rs`、还原三文件为上游版、删掉 `lib.rs` 的两行接线即可。
+
 ## 问题场景
 
 ### 问题 1：Windows 退出卡死 5-6 分钟
