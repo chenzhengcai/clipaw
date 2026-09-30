@@ -396,6 +396,11 @@ body.qwp-bg-global-on [class*='dockableSidebar-module'] {
   padding-top: 8px !important;
   padding-bottom: 8px !important;
 }
+body.qwp-bg-global-on [class*='index-module__root'],
+body.qwp-bg-global-on [class*='index-module__sidebar']
+{
+  background: rgb(248 244 248 / 35%);
+}
 
 
 
