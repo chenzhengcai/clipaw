@@ -402,6 +402,11 @@ body.qwp-bg-global-on [class*='index-module__sidebar']
   background: rgb(248 244 248 / 35%);
 }
 
+body.qwp-bg-global-on [class*='index-module__availableItem']
+{
+  background: var(--app-bg);
+}
+
 
 
 
