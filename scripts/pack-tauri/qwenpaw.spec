@@ -161,6 +161,15 @@ a = Analysis(
         # cannot discover it. Without this entry the desktop bundle fails to
         # start with ModuleNotFoundError on qwenpaw.app.channels.console.channel.
         "qwenpaw.app.channels.console",
+        # Terminal PTY backends are selected at request time via
+        # importlib.import_module (qwenpaw.services.terminal.native_pty), so
+        # PyInstaller cannot discover them; include the platform's backend.
+        # Windows also imports the native winpty binding dynamically.
+        *(
+            ["qwenpaw.services.terminal_windows", "winpty"]
+            if sys.platform == "win32"
+            else ["qwenpaw.services.terminal_posix"]
+        ),
         # ACP runner support is lazily imported by delegate_external_agent.
         *collect_submodules("qwenpaw.agents.acp"),
         # PawApp SDK modules are imported by installed app plugins at runtime.
