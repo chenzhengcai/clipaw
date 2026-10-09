@@ -455,6 +455,17 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     except Exception:
         logger.warning("Bridge token priming failed", exc_info=True)
 
+    # Resolving the process timezone can run subprocess probes (POSIX
+    # `timedatectl`), so warm the cache off the event loop here rather than
+    # letting the first chat-history request pay for it. Best-effort: the
+    # cache is populated lazily anyway.
+    try:
+        from .chats.utils import _process_local_tz
+
+        await asyncio.to_thread(_process_local_tz)
+    except Exception:
+        logger.debug("Timezone prewarm skipped", exc_info=True)
+
     fast_elapsed = time.time() - startup_start_time
     logger.info(
         f"Server ready in {fast_elapsed:.3f}s (agents loading in background)",
