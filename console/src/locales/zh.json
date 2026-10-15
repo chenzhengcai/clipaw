@@ -91,6 +91,10 @@
     "copied": "错误信息已复制",
     "copyFailed": "复制失败，请展开详情后手动复制。",
     "checking": "正在复查失败资源…",
+    "serverReadiness": {
+      "checking": "正在等待本地服务和页面资源恢复可用…",
+      "timeout": "本地服务或页面资源仍不可用，请稍后再次尝试重新加载。"
+    },
     "recheckNote": "originalError 为原始异常，recheck 为故障后的资源复查结果，不能代表首次请求。未知信息保留为 null；复查无法区分 DNS、TLS、CORS 或代理故障。",
     "observations": {
       "missing": "资源复查：资源当前不存在（404）。",
@@ -5252,6 +5256,7 @@
     "catalogSha256": "SHA256",
     "kindBundle": "插件包",
     "kindTool": "工具",
+    "kindHub": "Hub",
     "filterByName": "按名称筛选",
     "filterByKind": "按标签筛选",
     "marketTitle": "插件市场",
@@ -5324,6 +5329,7 @@
     "categoryAll": "全部",
     "categoryPlaceholder": "搜索分类",
     "searchResult": "\"{{keyword}}\" 相关技能共搜索到 {{count}} 个结果",
+    "noHubs": "暂无已加载的 Hub，请在插件管理中安装 Hub 插件。",
     "providerUnavailable": "数据源不可用",
     "noResults": "没有找到结果",
     "startTyping": "在上方输入关键字以搜索技能市场",
