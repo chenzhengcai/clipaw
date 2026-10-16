@@ -57,6 +57,10 @@
     "advancedSettings": "Advanced",
     "done": "Done",
     "autoSaveFailed": "Could not save changes",
+    "discardChangesTitle": "Discard unsaved changes?",
+    "discardChangesContent": "Some changes could not be saved. You can continue editing or discard the unsaved changes and close.",
+    "discardAndClose": "Discard and close",
+    "keepEditing": "Continue editing",
     "configure": "Configure",
     "all": "All",
     "decrease": "Decrease",
@@ -2466,6 +2470,7 @@
     "configuredModels": "Configured models",
     "freeModelsOnly": "Free models only",
     "chooseFallback": "Backup model",
+    "noFallback": "None",
     "moveFallbackUp": "Move {{model}} up",
     "moveFallbackDown": "Move {{model}} down",
     "removeFallback": "Remove {{model}}",
@@ -2556,6 +2561,10 @@
     "retry": "Retry"
   },
   "models": {
+    "modelType": "Model type",
+    "modelTypeChat": "Chat",
+    "modelTypeDecision": "Decision",
+    "decisionModelHint": "Decision models are configured here for future automation features and cannot be used for chat.",
     "connectProviderTitle": "Connect your first model",
     "cardStatus": {
       "configured": "Configured",
@@ -2580,6 +2589,9 @@
     "providersTitle": "Providers",
     "providersDescription": "Configure API keys and endpoints for each provider.",
     "llmTitle": "Models",
+    "defaultModels": "Default models",
+    "defaultChatModel": "Chat model",
+    "defaultDecisionModel": "Decision model",
     "defaultLlm": "Default LLM",
     "notConfiguredYet": "Not configured",
     "llmDescription": "Set the global default LLM model from an authorized provider. You can choose a specific model for each Agent in the Chat page.",
@@ -4049,6 +4061,10 @@
     "system": "System"
   },
   "chat": {
+    "sessionSettings": {
+      "advanced": "Advanced options",
+      "decisionEnabled": "Use decision model"
+    },
     "longTextPaste": {
       "title": "Paste long text",
       "asText": "Paste as text",
@@ -4180,6 +4196,10 @@
       "moveToGroup": "Move to group",
       "copyId": "Copy conversation ID",
       "delete": "Delete"
+    },
+    "pluginSubmission": {
+      "staleConversation": "Open the original conversation before submitting this action.",
+      "notReady": "Chat is not ready. Open the original conversation and retry."
     },
     "queue": {
       "title": "Message Queue",
