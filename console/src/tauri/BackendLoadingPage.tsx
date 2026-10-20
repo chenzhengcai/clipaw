@@ -48,7 +48,11 @@ export default function BackendLoadingPage({
   return (
     <div className={styles.page}>
       <div className={styles.card}>
-        <img src="/clipaw.png" alt="CliPaw" className={styles.logo} />
+        <img
+          src={`${import.meta.env.BASE_URL}clipaw.png`}
+          alt="CliPaw"
+          className={styles.logo}
+        />
 
         <Progress
           type="dashboard"

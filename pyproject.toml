@@ -155,10 +155,10 @@ whisper = [
     "openai-whisper>=20231117",
 ]
 qwenpaw-data = [
-    "qwenpaw-data-context>=0.3,<0.4",
-    "qwenpaw-data-host-core[service]>=0.3,<0.4",
-    "qwenpaw-data-cli>=0.3,<0.4",
-    "qwenpaw-data-skills>=0.3,<0.4",
+    "qwenpaw-data-context>=0.3.3,<0.4",
+    "qwenpaw-data-host-core[service]>=0.3.3,<0.4",
+    "qwenpaw-data-cli>=0.3.3,<0.4",
+    "qwenpaw-data-skills>=0.3.3,<0.4",
 ]
 full = [
     "qwenpaw[qwenpaw-data,hub,local,whisper]",
