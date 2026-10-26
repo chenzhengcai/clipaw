@@ -87,11 +87,13 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.13.4"
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version-file: .nvmrc
           cache: "npm"
           cache-dependency-path: console/package-lock.json
 
@@ -170,11 +172,13 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.13.4"
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version-file: .nvmrc
           cache: "npm"
           cache-dependency-path: console/package-lock.json
 

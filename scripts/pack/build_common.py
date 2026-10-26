@@ -138,6 +138,12 @@ def main() -> int:
                 "-y",
             ],
         )
+        _run(
+            [
+                conda, "run", "-n", env_name, "python",
+                "-m", "pip", "install", "--upgrade", "pip>=26.2.2",
+            ],
+        )
         # Install qwenpaw with all dependencies
         # Scope CMAKE_ARGS to this specific command to avoid affecting other
         # CMake-based packages. Only set if we need to compile from source.
@@ -164,6 +170,9 @@ def main() -> int:
                 # codex/qoder are also excluded: their CLI binaries add ~400MB
                 # and are not needed for non-coding use cases.
                 f"qwenpaw[qwenpaw-data,hub,local] @ {wheel_uri}",
+                # Pin a current certifi for a healthy CA bundle (from main);
+                # the verification below still double-checks it imports.
+                "certifi>=2026.10.19",
             ],
             env=install_env,
         )
@@ -216,7 +225,7 @@ def main() -> int:
                 "install",
                 "-y",
                 "--force-reinstall",
-                "pip",
+                "pip>=26.2.2",
                 "setuptools",
                 "wheel",
             ],
