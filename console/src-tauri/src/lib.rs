@@ -8,9 +8,6 @@ mod computer_use_protocol;
 mod computer_use_runtime;
 mod external_link;
 mod runtime_env;
-// Fork-only module: desktop shutdown orchestration (detached-thread cleanup,
-// process-tree kill). See shutdown.rs header for why it is separate.
-mod shutdown;
 mod tray;
 mod updates;
 #[cfg(windows)]
@@ -27,8 +24,17 @@ fn open_devtools(window: WebviewWindow) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-/// Build the desktop app, wire native plugins/commands, and stop the backend on exit.
+/// Build the desktop app, wire native plugins/commands, and attach to the shared runtime.
 pub fn run() {
+    let context = tauri::generate_context!();
+    let registration = match updates::coordination::register_desktop(&context.config().identifier) {
+        Ok(Some(registration)) => registration,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("[QwenPaw Desktop] Cannot register this window: {error}");
+            std::process::exit(1);
+        }
+    };
     let build_result = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -40,12 +46,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_devtools,
             backend_download::download_backend_file,
-            backend_download::read_workspace_binary_file,
-            backend::backend_port,
-            backend::backend_startup_error,
+            backend::agent_host_state,
             backend::restart_backend,
             external_link::open_external_link,
             external_link::open_workspace_html,
+            updates::coordination::confirm_desktop_update,
             updates::check_desktop_update,
             updates::install_desktop_update,
             updates::download_desktop_update,
@@ -53,14 +58,19 @@ pub fn run() {
             updates::check_cached_update,
             tray::minimize_to_tray,
             tray::quit_app,
+            tray::stop_service,
             tray::set_tray_labels,
             tray::ack_close,
+            tray::set_close_action,
+            tray::get_close_action,
         ])
+        .manage(registration)
+        .manage(updates::coordination::Confirmation::default())
         .manage(backend::BackendState::default())
         .manage(computer_use_runtime::ComputerUseRuntimeState::default())
         .manage(tray::TrayState::default())
-        .manage(shutdown::ShutdownState::default())
         .setup(|app| {
+            updates::coordination::setup(app.handle())?;
             backend::setup(app)?;
             tray::setup(app)?;
             #[cfg(windows)]
@@ -77,62 +87,26 @@ pub fn run() {
                 tray::request_close(window.app_handle());
             }
         })
-        .build(tauri::generate_context!());
+        .build(context);
 
     match build_result {
         Ok(app) => {
             app.run(|app_handle, event| match event {
-                // `code` is `None` only for OS-initiated quits (e.g. macOS
-                // Cmd+Q / app menu Quit). On macOS we call `exit_app` directly
-                // (same as the X button / tray Quit) so the detached shutdown
-                // thread always runs, even if the frontend WebView is
-                // unresponsive after the Cmd+Q signal. Programmatic exits from
-                // `quit_app` carry a `code` and fall through to the normal
-                // shutdown path below.
                 RunEvent::ExitRequested { api, code, .. } => {
                     #[cfg(windows)]
                     if code.is_none() && webview_recovery::is_active() {
                         api.prevent_exit();
-                        log::warn!("[webview] keeping the app alive while the main window recovers");
                         return;
                     }
                     #[cfg(target_os = "macos")]
-                    if code.is_none() {
-                        // macOS Cmd+Q / app menu Quit. We MUST prevent the OS
-                        // from terminating the app here, otherwise the detached
-                        // shutdown thread spawned by `exit_app` is killed
-                        // before it can stop the backend sidecar, leaving
-                        // `qwenpaw-backend` orphaned (reparented to launchd,
-                        // PPID 1). `exit_app` hides the window at once and its
-                        // shutdown thread calls `std::process::exit(0)` once
-                        // the sidecar is stopped, so preventing the exit only
-                        // keeps the process alive long enough for cleanup -
-                        // the window still vanishes immediately.
+                    if code.is_none() && !tray::is_quitting(app_handle) {
                         api.prevent_exit();
-                        tray::exit_app(app_handle);
+                        tray::request_quit(app_handle);
                         return;
                     }
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = (&api, &code);
-                    // If `quit_app` / tray Quit already started backend shutdown
-                    // via `exit_app`, a detached OS thread is handling
-                    // `stop_and_wait`, `computer_use_runtime::stop`, and will
-                    // call `std::process::exit(0)` itself when done (bypassing
-                    // `ExitRequested` to avoid a join deadlock). This branch is
-                    // only reached if an external `ExitRequested` fires while
-                    // the thread is still running (e.g. macOS second Cmd+Q or
-                    // system logout). We join the thread so the process does
-                    // not exit mid-cleanup; if the join times out, we abandon
-                    // it and let the process exit.
-                    if !shutdown::initiated(app_handle) {
-                        if let Err(err) =
-                            tauri::async_runtime::block_on(backend::stop_and_wait(app_handle))
-                        {
-                            log::warn!("[backend] graceful shutdown did not complete: {err}");
-                        }
-                        computer_use_runtime::stop(app_handle);
-                    } else {
-                        shutdown::join_shutdown_thread(app_handle);
+                    if !tray::shutdown_complete(app_handle) {
+                        api.prevent_exit();
+                        tray::exit_app(app_handle, code.unwrap_or(0));
                     }
                 }
                 // macOS emits this when the user clicks the Dock icon. Without
@@ -142,15 +116,6 @@ pub fn run() {
                 RunEvent::Reopen { .. } => {
                     tray::show_main_window(app_handle);
                 }
-                RunEvent::Exit => {
-                    // macOS Cmd+Q / app-menu Quit reaches here (via
-                    // `applicationWillTerminate` -> `LoopDestroyed`), NOT
-                    // through `ExitRequested`. This is the last synchronous
-                    // chance to stop the backend sidecar before the process
-                    // exits and orphans it. Without this, the detached
-                    // shutdown thread is killed mid-cleanup.
-                    shutdown::exit_cleanup_blocking(app_handle);
-                }
                 _ => {}
             });
         }
@@ -159,4 +124,9 @@ pub fn run() {
             std::process::exit(1);
         }
     }
+}
+
+/// Run the detached desktop supervisor without constructing a WebView.
+pub fn run_agent_host() -> Result<(), String> {
+    backend::daemon::run()
 }
