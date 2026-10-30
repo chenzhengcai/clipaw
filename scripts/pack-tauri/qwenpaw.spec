@@ -9,6 +9,7 @@ option.
 """
 
 import os
+import runpy
 import sys
 from pathlib import Path
 
@@ -23,6 +24,21 @@ REPO_ROOT = Path(SPECPATH).parent.parent
 
 SRC = REPO_ROOT / "src" / "qwenpaw"
 MAIL_MCP_SRC = REPO_ROOT / "packages" / "qwenpawmail-mcp" / "src"
+_external_channel_modules = tuple(
+    "qwenpaw.app.channels." + row["channel_key"]
+    for row in runpy.run_path(
+        str(SRC / "plugins/official_channel_catalog.py")
+    )["OFFICIAL_CHANNELS"]
+)
+
+
+def core_channel_module(name):
+    return not any(
+        name == module or name.startswith(module + ".")
+        for module in _external_channel_modules
+    )
+
+
 if sys.platform == "darwin":
     codesign_identity = os.environ.get(
         "PYINSTALLER_CODESIGN_IDENTITY"
@@ -32,9 +48,13 @@ if sys.platform == "darwin":
 else:
     codesign_identity = None
 
+
 def collect_tree(source_dir, target_dir):
     return [
-        (str(path), str(Path(target_dir) / path.relative_to(source_dir).parent))
+        (
+            str(path),
+            str(Path(target_dir) / path.relative_to(source_dir).parent),
+        )
         for path in source_dir.rglob("*")
         if path.is_file()
     ]
@@ -57,7 +77,6 @@ _data_dirs = [
     ("security/tool_guard/rules", "qwenpaw/security/tool_guard/rules"),
     ("security/skill_scanner/rules", "qwenpaw/security/skill_scanner/rules"),
     ("security/skill_scanner/data", "qwenpaw/security/skill_scanner/data"),
-    ("app/channels/yuanbao/proto", "qwenpaw/app/channels/yuanbao/proto"),
     ("providers/data", "qwenpaw/providers/data"),
 ]
 datas = [
@@ -99,9 +118,17 @@ datas += collect_data_files(
 # The native Code Mode worker runs under the bundled standalone CPython.
 datas.append((str(SRC / "modes/coding/_worker.py"), "qwenpaw/modes/coding"))
 
-# Collect package metadata for packages that use importlib.metadata at runtime.
-# Keep this allowlist in sync when adding runtime dependencies that query
-# importlib.metadata, otherwise packaged sidecars may fail only after install.
+# The dependency gate needs complete host metadata, not only the packages
+# that query their own versions. (Fork: the desktop build installs the slim
+# extras qwenpaw-data,hub,local — matching build_pyinstaller.sh/.ps1.)
+datas += runpy.run_path(str(Path(SPECPATH) / "collect_runtime_metadata.py"))[
+    "collect_runtime_metadata"
+](
+    ["qwenpaw[qwenpaw-data,hub,local]"],
+    copy_metadata,
+)
+
+# Preserve metadata for historical optional integrations when installed.
 _metadata_pkgs = [
     "qwenpaw",
     "fastmcp",
@@ -163,8 +190,11 @@ a = Analysis(
         *collect_submodules("qwenpaw.cli"),
         # The mail MCP package lives under a second setuptools source root.
         *collect_submodules("qwenpawmail_mcp"),
-        # All channel adapters (imported on-demand at runtime)
-        *collect_submodules("qwenpaw.app.channels"),
+        # External runtimes live in the authenticated readable ZIP resources.
+        # Keep common host/QR services and Console in the frozen host.
+        *collect_submodules(
+            "qwenpaw.app.channels", filter=core_channel_module
+        ),
         # Console channel — required by qwenpaw.app.channels.registry but
         # loaded via importlib.import_module(".console", ...), so PyInstaller
         # cannot discover it. Without this entry the desktop bundle fails to
@@ -219,6 +249,8 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # Fork slim-build excludes: the heavy ML stack and coding CLIs
+        # are not bundled (see build_common.py).
         "torch",
         "torchvision",
         "torchaudio",
@@ -226,6 +258,12 @@ a = Analysis(
         "codex_cli_bin",
         "qoder_agent_sdk",
         "openai_codex",
+        # Upstream (main): external channel modules now live in isolated
+        # subprocess plugins, not in the frozen host.
+        "lark_oapi",
+        "dingtalk_stream",
+        "alibabacloud_dingtalk",
+        *_external_channel_modules,
     ],
     noarchive=False,
 )
