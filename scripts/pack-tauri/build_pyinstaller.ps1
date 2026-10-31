@@ -174,8 +174,14 @@ New-Item -ItemType Directory -Force -Path $DESKTOP_WHEELS | Out-Null
 # frozen host and readable runtime, using the canonical Python ABI.
 # (Fork: installs the slim desktop extras qwenpaw-data,hub,local — without
 # codex/qoder/whisper — see scripts/pack/build_common.py for the rationale.)
+# The channels extra is wheeled into this shared pool as well: the readable
+# channel runtime below resolves qwenpaw[channels] offline (--no-index) from
+# this pool, so every channel-only dependency (alibabacloud-dingtalk,
+# dingtalk-stream, lark-oapi, ...) must be present here. The frozen venv
+# install right after still requests only the slim extras, so the PyInstaller
+# backend bundle itself ships without the channel SDKs.
 & $PYTHON_BIN -m pip wheel --prefer-binary --wheel-dir $DESKTOP_WHEELS `
-    ".[qwenpaw-data,hub,local]" "setuptools<82" wheel `
+    ".[qwenpaw-data,hub,local,channels]" "setuptools<82" wheel `
     -r (Join-Path $REPO_ROOT "scripts\pack-tauri\native-host-requirements.txt")
 Assert-LastExit "Desktop dependency wheel build failed"
 $HOST_WHEELS = @(Get-ChildItem $DESKTOP_WHEELS -Filter "qwenpaw-*.whl")
