@@ -17,7 +17,6 @@ from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_submodules,
     copy_metadata,
-    get_package_paths,
 )
 
 REPO_ROOT = Path(SPECPATH).parent.parent
@@ -73,6 +72,10 @@ if not (CONSOLE_DIST / "index.html").is_file():
 _data_dirs = [
     ("agents/skills", "qwenpaw/agents/skills"),
     ("agents/md_files", "qwenpaw/agents/md_files"),
+    (
+        "agents/context/visual_compression/assets",
+        "qwenpaw/agents/context/visual_compression/assets",
+    ),
     ("tokenizer", "qwenpaw/tokenizer"),
     ("security/tool_guard/rules", "qwenpaw/security/tool_guard/rules"),
     ("security/skill_scanner/rules", "qwenpaw/security/skill_scanner/rules"),
@@ -88,6 +91,12 @@ datas.append(
     (
         str(SRC / "browser/control_link/injected/engine.js"),
         "qwenpaw/browser/control_link/injected",
+    ),
+)
+datas.append(
+    (
+        str(SRC / "local_models/runtime-release.json"),
+        "qwenpaw/local_models",
     ),
 )
 
@@ -115,12 +124,21 @@ datas += collect_data_files(
 # install the CLIs separately; the harness registry falls back to
 # MissingDependencyAdapter gracefully.
 
-# The native Code Mode worker runs under the bundled standalone CPython.
-datas.append((str(SRC / "modes/coding/_worker.py"), "qwenpaw/modes/coding"))
+# Standalone workers need readable sources outside the frozen module archive.
+for relative in (
+    "modes/coding/_worker.py",
+    "agents/context/scroll/memoryspace.py",
+    "backup/_ops/sqlite_snapshot.py",
+    "utils/sqlite_uri.py",
+):
+    datas.append(
+        (str(SRC / relative), str(Path("qwenpaw") / Path(relative).parent)),
+    )
 
 # The dependency gate needs complete host metadata, not only the packages
 # that query their own versions. (Fork: the desktop build installs the slim
-# extras qwenpaw-data,hub,local — matching build_pyinstaller.sh/.ps1.)
+# extras qwenpaw-data,hub,local — matching build_pyinstaller.sh/.ps1.
+# Optional Harness runtimes remain outside that dependency graph.)
 datas += runpy.run_path(str(Path(SPECPATH) / "collect_runtime_metadata.py"))[
     "collect_runtime_metadata"
 ](
@@ -156,7 +174,7 @@ _metadata_pkgs = [
 ]
 for _pkg in _metadata_pkgs:
     try:
-        datas += copy_metadata(_pkg)
+        datas += copy_metadata(_pkg, recursive=True)
     except Exception:
         pass
 
@@ -248,6 +266,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
+    # Optional Harness runtimes belong to independently installed plugins.
     excludes=[
         # Fork slim-build excludes: the heavy ML stack and coding CLIs
         # are not bundled (see build_common.py).
@@ -259,7 +278,9 @@ a = Analysis(
         "qoder_agent_sdk",
         "openai_codex",
         # Upstream (main): external channel modules now live in isolated
-        # subprocess plugins, not in the frozen host.
+        # subprocess plugins, not in the frozen host. The Python harness
+        # runtimes likewise moved out to independently installed plugins.
+        "qwenpaw.harnesses",
         "lark_oapi",
         "dingtalk_stream",
         "alibabacloud_dingtalk",

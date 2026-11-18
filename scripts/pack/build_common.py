@@ -189,6 +189,24 @@ def main() -> int:
                 "import certifi; print(f'certifi OK: {certifi.where()}')",
             ],
         )
+        # The default desktop environment must stay free of the optional
+        # Harness SDKs; they add hundreds of MB and are installed separately
+        # only when the matching Harness plugin is enabled.
+        _run(
+            [
+                conda,
+                "run",
+                "--no-capture-output",
+                "-n",
+                env_name,
+                "python",
+                "-c",
+                "from importlib.util import find_spec; "
+                "assert not any(find_spec(name) for name in "
+                "('openai_codex', 'codex_cli_bin', 'qoder_agent_sdk')), "
+                "'Optional Harness SDK found in default desktop environment'",
+            ],
+        )
         if args.cache_wheels:
             # Store outside dist/ to avoid being deleted by wheel_build cleanup
             wheels_cache = REPO_ROOT / ".cache" / "conda_unpack_wheels"
