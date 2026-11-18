@@ -36,20 +36,15 @@ from qwenpaw.exceptions import (
     ConfigurationException,
 )
 
+from .history_path import normalize_history_db_filename
 from .timezone import detect_system_timezone
+from .channel_normalizers import NORMALIZER_MARKER, strip_trailing_slash
 from ..constant import (
     HEARTBEAT_DEFAULT_EVERY,
     HEARTBEAT_DEFAULT_TARGET,
     HEARTBEAT_DEFAULT_TIMEOUT_SECONDS,
     HEARTBEAT_MAX_TIMEOUT_SECONDS,
-    LLM_ACQUIRE_TIMEOUT,
-    LLM_BACKOFF_BASE,
-    LLM_BACKOFF_CAP,
-    LLM_MAX_CONCURRENT,
-    LLM_MAX_RETRIES,
-    LLM_MAX_QPM,
-    LLM_RATE_LIMIT_JITTER,
-    LLM_RATE_LIMIT_PAUSE,
+    EnvVarLoader,
     WORKING_DIR,
 )
 from ..utils.io_utils import write_json_atomic
@@ -58,6 +53,70 @@ from ..utils.logging import sanitize_log_value
 logger = logging.getLogger(__name__)
 
 AUTO_FIN_MAX_WINDOW_HOURS = 168
+
+_CSS_HEX_COLOR_RE = re.compile(
+    r"^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+)
+_CSS_COLOR_FUNCTION_RE = re.compile(
+    r"^(rgb|rgba|hsl|hsla)\(([^()]*)\)$",
+    re.IGNORECASE,
+)
+_CSS_NUMBER_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
+_CSS_NUMBER_RE = re.compile(rf"^{_CSS_NUMBER_PATTERN}$")
+_CSS_PERCENT_RE = re.compile(rf"^{_CSS_NUMBER_PATTERN}%$")
+_CSS_HUE_RE = re.compile(
+    rf"^{_CSS_NUMBER_PATTERN}(?:deg|grad|rad|turn)?$",
+    re.IGNORECASE,
+)
+_CSS_RADIUS_RE = re.compile(r"^(?:0|(?:0|[1-9]\d*)(?:\.\d+)?px)$")
+
+
+def _is_safe_css_color(value: str) -> bool:
+    """Return whether a value is a supported standalone CSS color."""
+    normalized = value.strip()
+    if _CSS_HEX_COLOR_RE.fullmatch(normalized):
+        return True
+
+    match = _CSS_COLOR_FUNCTION_RE.fullmatch(normalized)
+    if match is None:
+        return False
+
+    function_name, body = match.groups()
+    if "," in body:
+        parts = [part.strip() for part in body.split(",")]
+        channels = parts[:3]
+        alpha = parts[3] if len(parts) == 4 else None
+        valid_syntax = "/" not in body and len(parts) in (3, 4) and all(parts)
+    else:
+        slash_parts = body.split("/")
+        channels = slash_parts[0].split()
+        alpha = slash_parts[1].strip() if len(slash_parts) == 2 else None
+        valid_syntax = (
+            len(slash_parts) <= 2
+            and len(channels) == 3
+            and (alpha is None or bool(alpha))
+        )
+
+    if not valid_syntax:
+        return False
+
+    if alpha is not None and not (
+        _CSS_NUMBER_RE.fullmatch(alpha) or _CSS_PERCENT_RE.fullmatch(alpha)
+    ):
+        return False
+
+    if function_name.lower().startswith("rgb"):
+        return all(
+            _CSS_NUMBER_RE.fullmatch(channel)
+            or _CSS_PERCENT_RE.fullmatch(channel)
+            for channel in channels
+        )
+    return bool(
+        _CSS_HUE_RE.fullmatch(channels[0])
+        and _CSS_PERCENT_RE.fullmatch(channels[1])
+        and _CSS_PERCENT_RE.fullmatch(channels[2]),
+    )
+
 
 # A legacy field can be present in the root config and in several agent
 # profiles, all of which may be validated repeatedly during one process
@@ -139,6 +198,9 @@ def _assert_agent_config_unchanged(
 # ============================================================================
 
 
+ModelType = Literal["chat", "decision"]
+
+
 class ModelSlotConfig(BaseModel):
     """Model slot configuration for LLM routing."""
 
@@ -150,6 +212,9 @@ class ActiveModelsInfo(BaseModel):
     """Active models information for provider manager."""
 
     active_llm: ModelSlotConfig | None
+    default_models: Dict[ModelType, ModelSlotConfig | None] = Field(
+        default_factory=dict,
+    )
     effective_max_input_length: int | None = None
 
 
@@ -335,6 +400,8 @@ class DiscordConfig(BaseChannelConfig):
 
 
 class DingTalkConfig(BaseChannelConfig):
+    model_config = ConfigDict(extra="allow")
+
     client_id: str = ""
     client_secret: str = ""
     message_type: str = "markdown"
@@ -356,9 +423,13 @@ class FeishuConfig(BaseChannelConfig):
     domain: 'feishu' for China, 'lark' for international.
     streaming_enabled: enable CardKit streaming card updates for real-time
     typewriter-style text output.
+    auto_collapse_thinking: collapse the reasoning panel when its stream
+    finishes (the panel stays manually collapsible either way).
     share_session_in_group: if True, all group members share one session;
     if False (default), each member gets an independent session.
     """
+
+    model_config = ConfigDict(extra="allow")
 
     app_id: str = ""
     app_secret: str = ""
@@ -366,7 +437,10 @@ class FeishuConfig(BaseChannelConfig):
     verification_token: str = ""
     media_dir: Optional[str] = None
     # "feishu" / "lark", or a full http(s) base URL for custom gateways.
-    domain: str = "feishu"
+    domain: str = Field(
+        default="feishu",
+        json_schema_extra={"pattern": "^(feishu$|lark$|https?://)"},
+    )
 
     @field_validator("domain")
     @classmethod
@@ -379,6 +453,9 @@ class FeishuConfig(BaseChannelConfig):
 
     streaming_enabled: bool = False
     share_session_in_group: bool = False
+    # Auto-collapse the reasoning panel once a stream finishes. The panel is
+    # always collapsible by hand; this only controls the automatic collapse.
+    auto_collapse_thinking: bool = False
 
 
 class QQConfig(BaseChannelConfig):
@@ -475,12 +552,13 @@ class WecomConfig(BaseChannelConfig):
 class MatrixConfig(BaseChannelConfig):
     """Matrix channel configuration."""
 
-    homeserver: str = ""
-
-    @field_validator("homeserver")
-    @classmethod
-    def strip_trailing_slash(cls, v: str) -> str:
-        return v.rstrip("/")
+    homeserver: str = Field(
+        default="",
+        json_schema_extra={NORMALIZER_MARKER: "strip_trailing_slash"},
+    )
+    strip_trailing_slash = field_validator("homeserver", mode="after")(
+        strip_trailing_slash,
+    )
 
     user_id: str = ""
     access_token: str = ""
@@ -580,7 +658,7 @@ class WeChatConfig(BaseChannelConfig):
 
     bot_token:              Bearer token obtained after QR code login.
     bot_token_file:         Path to persist/load the bot_token
-                            (default ~/.qwenpaw/wechat_bot_token).
+                            (default <workspace>/wechat/wechat_bot_token).
     base_url:               iLink API base URL (leave empty to use default).
     media_dir:              Local directory for downloaded media files.
     message_merge_enabled:  When True, merge multiple outgoing text messages
@@ -831,83 +909,6 @@ class RerankerConfig(BaseModel):
     )
 
 
-class ADBPGMemoryConfig(BaseModel):
-    """ADBPG (AnalyticDB for PostgreSQL) REST memory configuration."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    rest_base_url: str = ""
-    rest_api_key: str = ""
-
-    # Behavior
-    memory_isolation: bool = Field(
-        default=True,
-        description="Per-agent memory isolation (True) or shared (False)",
-    )
-    search_timeout: float = 10.0
-    auto_memory_search_config: AutoMemorySearchConfig = Field(
-        default_factory=lambda: AutoMemorySearchConfig(
-            enabled=True,
-            max_results=3,
-        ),
-    )
-
-
-class PowerContextAutoMemorySearchConfig(AutoMemorySearchConfig):
-    """PowerContext-specific bounds for automatic memory recall."""
-
-    max_context_bytes: int = Field(
-        default=12000,
-        ge=1024,
-        le=32768,
-        description=(
-            "Maximum total UTF-8 byte size of PowerContext search results "
-            "injected into one model turn"
-        ),
-    )
-
-
-class PowerContextMemoryConfig(BaseModel):
-    """PowerContext HTTP memory configuration."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    base_url: str = ""
-    token: str = ""
-    scope_id: str = Field(default="", max_length=256)
-    timeout: float = Field(
-        default=10.0,
-        ge=1.0,
-        le=60.0,
-        allow_inf_nan=False,
-    )
-    auto_memory_search_config: PowerContextAutoMemorySearchConfig = Field(
-        default_factory=lambda: PowerContextAutoMemorySearchConfig(
-            enabled=True,
-            max_results=3,
-        ),
-    )
-
-    @model_validator(mode="after")
-    def validate_powercontext_search_limit(self):
-        """Keep the configured result count within PowerContext's limit."""
-        if self.auto_memory_search_config.max_results > 50:
-            raise ValueError(
-                "PowerContext auto memory search max_results must be "
-                "less than or equal to 50",
-            )
-        return self
-
-    @field_validator("scope_id")
-    @classmethod
-    def validate_powercontext_scope_id(cls, scope_id: str) -> str:
-        """Allow an empty auto scope, but reject invalid explicit scopes."""
-        normalized = scope_id.strip()
-        if scope_id and not normalized:
-            raise ValueError("PowerContext scope_id must not be blank")
-        return normalized
-
-
 class ReMeLightMemoryConfig(BaseModel):
     """ReMeLight memory manager configuration."""
 
@@ -973,6 +974,19 @@ class ReMeLightMemoryConfig(BaseModel):
         "None or <= 0 disables periodic auto memory. WARNING: Setting "
         "too small (e.g., 1-3) may cause high token usage and heavy "
         "background task burden.",
+    )
+
+    auto_memory_include_images: bool = Field(
+        default=False,
+        description=(
+            "Include conversation images in auto-memory when the memory "
+            "model has confirmed image-input support"
+        ),
+    )
+
+    auto_memory_generate_tags: bool = Field(
+        default=False,
+        description="Generate entity tags after auto-memory writes a note",
     )
 
     dream_cron_enabled: bool = Field(
@@ -1195,7 +1209,8 @@ class ToolResultPruningConfig(BaseModel):
         ge=1,
         le=365,
         description=(
-            "Number of days to retain complete archived tool result files. "
+            "Number of days to retain complete archived tool result files "
+            "after their latest publication or reuse. "
             "This lifetime is independent of Scroll history retention; after "
             "expiry, history may still contain the bounded preview but not "
             "the complete artifact."
@@ -1231,17 +1246,25 @@ class ScrollContextConfig(BaseModel):
     """Scroll (retrieval-driven) context manager configuration.
 
     Only consulted when ``LightContextConfig.strategy == "scroll"``. The
-    durable history lives at ``{working_dir}/{db_filename}``; evicted turns
-    fold into an in-context eviction index recallable from the sandboxed
-    ``recall_history_python`` REPL.
+    durable history uses ``db_filename`` (relative to the workspace unless
+    absolute). Evicted turns fold into an in-context eviction index,
+    recallable from the sandboxed ``recall_history_python`` REPL.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     db_filename: str = Field(
         default="history.db",
-        description="SQLite history store filename, relative to working_dir.",
+        description=(
+            f"SQLite history path, absolute or relative to the workspace."
+        ),
     )
+
+    @field_validator("db_filename")
+    @classmethod
+    def validate_db_filename(cls, value: str) -> str:
+        """Normalize the configured durable history filename."""
+        return normalize_history_db_filename(value)
 
     tool_output_token_cap: int = Field(
         default=3000,
@@ -1259,6 +1282,17 @@ class ScrollContextConfig(BaseModel):
         ge=1,
         description=(
             "Per-call timeout for the recall_history_python REPL tool."
+        ),
+    )
+
+    summary_timeout_seconds: float = Field(
+        default=300.0,
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "Total continuation-summary timeout in seconds, including input "
+            "preparation, generation, validation and one quality retry. "
+            "Increase for slow reasoning models or long conversations."
         ),
     )
 
@@ -1316,6 +1350,22 @@ class VisualCompactConfig(BaseModel):
     )
 
 
+class DecisionCompactConfig(BaseModel):
+    """Optional recoverable tool-result compaction with a decision model."""
+
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
+
+    enabled: bool = False
+    drop_threshold: float = Field(default=0.1, ge=0, le=1)
+    preserve_recent_messages: int = Field(default=6, ge=0)
+    preview_chars: int = Field(default=300, ge=0)
+    total_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    max_state_tokens: int = Field(default=25000, gt=0)
+    max_request_tokens: int = Field(default=30000, gt=0)
+    evidence_chars: int = Field(default=2000, gt=0)
+    max_concurrency: int = Field(default=4, ge=1, le=32)
+
+
 class LightContextConfig(BaseModel):
     """Light context manager configuration."""
 
@@ -1354,6 +1404,9 @@ class LightContextConfig(BaseModel):
     scroll_config: ScrollContextConfig = Field(
         default_factory=ScrollContextConfig,
     )
+    decision_compact_config: DecisionCompactConfig = Field(
+        default_factory=DecisionCompactConfig,
+    )
     visual_compact_config: VisualCompactConfig = Field(
         default_factory=VisualCompactConfig,
     )
@@ -1378,8 +1431,8 @@ class LightContextConfig(BaseModel):
 class AutoTitleConfig(BaseModel):
     """Async chat-title generation configuration.
 
-    The console handler creates each new chat with a 10-character
-    placeholder name and spawns a background task that asks the active
+    The console handler creates each new chat with a placeholder name bounded
+    to 500 characters and spawns a background task that asks the active
     LLM for a concise title. Each new chat costs one short extra LLM
     call; flip ``enabled`` to ``False`` to keep the placeholder and
     avoid the spend.
@@ -1391,7 +1444,7 @@ class AutoTitleConfig(BaseModel):
         default=True,
         description=(
             "Generate a chat title via the active LLM after the first "
-            "user message. Disable to keep the truncated placeholder "
+            "user message. Disable to keep the placeholder "
             "and skip the extra per-chat LLM call."
         ),
     )
@@ -1508,6 +1561,7 @@ class RubricGateConfig(BaseModel):
             "early stop on text-only responses"
         ),
     )
+    use_decision_model: bool = False
     prompt: str = Field(
         default=(
             "You did not call any tool in the "
@@ -1610,7 +1664,7 @@ class GoalLoopModeConfig(BaseModel):
     """Editable values for the fixed built-in Goal pipeline."""
 
     max_iterations: int = Field(default=20, ge=1, le=500)
-    max_tokens: int = Field(default=300_000, ge=1)
+    max_tokens: int = Field(default=0, ge=-1)
 
 
 class MissionLoopModeConfig(BaseModel):
@@ -1803,24 +1857,41 @@ class AgentsRunningConfig(BaseModel):
     )
 
     llm_retry_enabled: bool = Field(
-        default=LLM_MAX_RETRIES > 0,
+        default_factory=lambda: EnvVarLoader.get_int(
+            "QWENPAW_LLM_MAX_RETRIES",
+            3,
+            min_value=0,
+        )
+        > 0,
         description="Whether to auto-retry transient LLM API errors",
     )
 
     llm_max_retries: int = Field(
-        default=max(LLM_MAX_RETRIES, 1),
+        default_factory=lambda: EnvVarLoader.get_int(
+            "QWENPAW_LLM_MAX_RETRIES",
+            3,
+            min_value=1,
+        ),
         ge=1,
         description="Maximum retry attempts for transient LLM API errors",
     )
 
     llm_backoff_base: float = Field(
-        default=LLM_BACKOFF_BASE,
+        default_factory=lambda: EnvVarLoader.get_float(
+            "QWENPAW_LLM_BACKOFF_BASE",
+            1.0,
+            min_value=0.1,
+        ),
         ge=0.1,
         description="Base delay in seconds for exponential LLM retry backoff",
     )
 
     llm_backoff_cap: float = Field(
-        default=LLM_BACKOFF_CAP,
+        default_factory=lambda: EnvVarLoader.get_float(
+            "QWENPAW_LLM_BACKOFF_CAP",
+            10.0,
+            min_value=0.5,
+        ),
         ge=0.5,
         description=(
             "Maximum delay cap in seconds for LLM retry backoff; "
@@ -1829,7 +1900,11 @@ class AgentsRunningConfig(BaseModel):
     )
 
     llm_max_concurrent: int = Field(
-        default=LLM_MAX_CONCURRENT,
+        default_factory=lambda: EnvVarLoader.get_int(
+            "QWENPAW_LLM_MAX_CONCURRENT",
+            10,
+            min_value=1,
+        ),
         ge=1,
         description=(
             "Maximum number of concurrent in-flight LLM calls. "
@@ -1838,7 +1913,11 @@ class AgentsRunningConfig(BaseModel):
     )
 
     llm_max_qpm: int = Field(
-        default=LLM_MAX_QPM,
+        default_factory=lambda: EnvVarLoader.get_int(
+            "QWENPAW_LLM_MAX_QPM",
+            600,
+            min_value=0,
+        ),
         ge=0,
         description=(
             "Maximum queries per minute (60-second sliding window). "
@@ -1848,7 +1927,11 @@ class AgentsRunningConfig(BaseModel):
     )
 
     llm_rate_limit_pause: float = Field(
-        default=LLM_RATE_LIMIT_PAUSE,
+        default_factory=lambda: EnvVarLoader.get_float(
+            "QWENPAW_LLM_RATE_LIMIT_PAUSE",
+            5.0,
+            min_value=1.0,
+        ),
         ge=1.0,
         description=(
             "Default pause duration (seconds) applied globally when a 429 "
@@ -1857,7 +1940,11 @@ class AgentsRunningConfig(BaseModel):
     )
 
     llm_rate_limit_jitter: float = Field(
-        default=LLM_RATE_LIMIT_JITTER,
+        default_factory=lambda: EnvVarLoader.get_float(
+            "QWENPAW_LLM_RATE_LIMIT_JITTER",
+            1.0,
+            min_value=0.0,
+        ),
         ge=0.0,
         description=(
             "Random jitter range (seconds) added on top of the pause so "
@@ -1866,7 +1953,11 @@ class AgentsRunningConfig(BaseModel):
     )
 
     llm_acquire_timeout: float = Field(
-        default=LLM_ACQUIRE_TIMEOUT,
+        default_factory=lambda: EnvVarLoader.get_float(
+            "QWENPAW_LLM_ACQUIRE_TIMEOUT",
+            300.0,
+            min_value=10.0,
+        ),
         ge=10.0,
         description=(
             "Maximum time (seconds) a caller waits to acquire a rate-limiter "
@@ -1940,17 +2031,11 @@ class AgentsRunningConfig(BaseModel):
 
     memory_manager_backend: str = Field(default="remelight")
 
-    adbpg_memory_config: Optional[ADBPGMemoryConfig] = Field(
-        default=None,
-        description="ADBPG memory configuration (used when "
-        "memory_manager_backend='adbpg')",
-    )
-
-    powercontext_memory_config: Optional[PowerContextMemoryConfig] = Field(
-        default=None,
+    memory_backend_configs: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
         description=(
-            "PowerContext memory configuration (used when "
-            "memory_manager_backend='powercontext')"
+            "Opaque per-agent configuration owned and validated by memory "
+            "backend plugins"
         ),
     )
 
@@ -1971,6 +2056,34 @@ class AgentsRunningConfig(BaseModel):
             "the value is written back to the agent profile."
         ),
     )
+
+    @field_validator("memory_manager_backend")
+    @classmethod
+    def normalize_memory_backend_id(cls, value: str) -> str:
+        """Persist backend identifiers in the registry's canonical form."""
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("memory_manager_backend must not be empty")
+        return normalized
+
+    @field_validator("memory_backend_configs")
+    @classmethod
+    def normalize_memory_backend_config_ids(
+        cls,
+        value: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Canonicalize opaque config keys and reject ambiguous duplicates."""
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for backend_id, config in value.items():
+            key = backend_id.strip().lower()
+            if not key:
+                raise ValueError("memory backend config id must not be empty")
+            if key in normalized:
+                raise ValueError(
+                    f"duplicate memory backend config id: {backend_id}",
+                )
+            normalized[key] = config
+        return normalized
 
 
 class AgentsLLMRoutingConfig(BaseModel):
@@ -2036,7 +2149,126 @@ class CodingModeConfig(BaseModel):
 
     enabled: bool = Field(
         default=False,
-        description="Enable Coding Mode IDE layout and tools",
+        description=(
+            "Route enabled tools through sandboxed Python orchestration"
+        ),
+    )
+
+
+AdvisorThinkingLevel = Literal["inherit", "off", "low", "medium", "high"]
+
+
+class AdvisorInterventionConfig(BaseModel):
+    """When the advisor is called back in mid-run (Advisor Mode).
+
+    The trigger fires on ``consecutive_failures`` failed tool calls in a
+    row, or ``window_failures`` failures within the last ``window_size``
+    steps. Counters reset after each intervention.
+    """
+
+    consecutive_failures: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Failed tool calls in a row before the advisor is consulted"
+        ),
+    )
+    window_size: int = Field(
+        default=10,
+        ge=1,
+        description="Number of recent steps the failure window spans",
+    )
+    window_failures: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Failed tool calls within the window before the advisor is "
+            "consulted"
+        ),
+    )
+    cooldown_steps: int = Field(
+        default=0,
+        ge=0,
+        description="Steps to wait after an intervention before the next",
+    )
+    max_interventions: int = Field(
+        default=3,
+        ge=0,
+        description="Maximum automatic interventions per run",
+    )
+
+
+class AdvisorModeConfig(BaseModel):
+    """Configuration for Advisor Mode (stored in agent.json).
+
+    In Advisor Mode the agent's primary model acts as the advisor: it
+    writes a strategic plan before the agent's first step and is consulted
+    again when the agent keeps failing. The agent itself (the worker) runs
+    on the cheaper ``subagent_model`` when one is configured.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable Advisor Mode for this agent",
+    )
+    plan_enabled: bool = Field(
+        default=True,
+        description=(
+            "Ask the advisor for a plan before the agent's first step"
+        ),
+    )
+    followup_enabled: bool = Field(
+        default=True,
+        description=(
+            "Consult the advisor again mid-run when repeated tool "
+            "failures are detected"
+        ),
+    )
+    on_demand_enabled: bool = Field(
+        default=True,
+        description=(
+            "Expose a consult_advisor tool so the agent can ask the "
+            "advisor on its own"
+        ),
+    )
+    max_consults: int = Field(
+        default=32,
+        ge=0,
+        description="Maximum on-demand consultations per conversation",
+    )
+    recent_messages: int = Field(
+        default=20,
+        ge=1,
+        description=(
+            "How many of the agent's latest messages the advisor sees at "
+            "each intervention or consultation. Every text, tool call and "
+            "tool result counts as one"
+        ),
+    )
+    intervention: AdvisorInterventionConfig = Field(
+        default_factory=AdvisorInterventionConfig,
+        description="Thresholds for the mid-run auto intervention",
+    )
+    advisor_model: Optional[ModelSlotConfig] = Field(
+        default=None,
+        description=(
+            "Model that answers as the advisor. None means the agent's "
+            "primary model"
+        ),
+    )
+    worker_model: Optional[ModelSlotConfig] = Field(
+        default=None,
+        description=(
+            "Model the agent runs on while Advisor Mode is on. None means "
+            "the sub-agent model, or the primary model when none is set"
+        ),
+    )
+    advisor_thinking: AdvisorThinkingLevel = Field(
+        default="off",
+        description=(
+            "Thinking level for the advisor's own calls. 'inherit' "
+            "follows the agent and model defaults"
+        ),
     )
 
 
@@ -2255,6 +2487,14 @@ class AgentProfileConfig(BaseModel):
         """Record the content version represented by this model."""
         self._source_digest = digest
 
+    @property
+    def uses_scroll_history(self) -> bool:
+        """Whether this runtime writes through to durable Scroll history."""
+        return (
+            self.backend == "qwenpaw"
+            and self.running.light_context_config.strategy == "scroll"
+        )
+
     id: str = Field(..., description="Unique agent ID")
     name: str = Field(..., description="Human-readable agent name")
     description: str = Field(default="", description="Agent description")
@@ -2265,9 +2505,13 @@ class AgentProfileConfig(BaseModel):
     project_dir: Optional[str] = Field(
         default=None,
         description=(
-            "Default project directory for tools and project files. "
+            "Primary default project directory (legacy single-path view). "
             "None means use workspace_dir."
         ),
+    )
+    project_dirs: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Ordered default project directories, primary first.",
     )
     backend: str = Field(
         default="qwenpaw",
@@ -2311,13 +2555,19 @@ class AgentProfileConfig(BaseModel):
         default=None,
         description="Active model for this agent (provider_id + model)",
     )
+    decision_model: Optional["ModelSlotConfig"] = Field(
+        default=None,
+        description=(
+            "Decision model for this agent; None disables it by default"
+        ),
+    )
     fallback_models: List["ModelSlotConfig"] = Field(
         default_factory=list,
-        description="Ordered model fallback chain for transient failures",
+        description="Ordered chat model fallback chain for transient failures",
     )
     fallback_policy: FallbackPolicyConfig = Field(
         default_factory=FallbackPolicyConfig,
-        description="Cross-model fallback policy",
+        description="Chat model fallback policy",
     )
     subagent_model: Optional["ModelSlotConfig"] = Field(
         default=None,
@@ -2326,13 +2576,25 @@ class AgentProfileConfig(BaseModel):
     thinking_level: Literal[
         "inherit",
         "off",
+        "minimal",
         "low",
         "medium",
         "high",
-    ] = Field(
-        default="inherit",
-        description="Provider-independent agent reasoning level",
-    )
+        "xhigh",
+        "max",
+        "budget",
+    ] = f"inherit"
+    thinking_budget: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode=f"after")
+    def validate_thinking_budget(self):
+        """Keep effort and numeric budget settings mutually exclusive."""
+        if (self.thinking_level == f"budget") != (
+            self.thinking_budget is not None
+        ):
+            raise ValueError(f"Budget mode requires thinking_budget")
+        return self
+
     language: str = Field(
         default="zh",
         description="Language setting for this agent",
@@ -2370,6 +2632,10 @@ class AgentProfileConfig(BaseModel):
     coding_mode: CodingModeConfig = Field(
         default_factory=CodingModeConfig,
         description="Coding Mode configuration for this agent",
+    )
+    advisor_mode: AdvisorModeConfig = Field(
+        default_factory=AdvisorModeConfig,
+        description="Advisor Mode configuration for this agent",
     )
     mail: Optional[AgentMailConfig] = Field(
         default=None,
@@ -2495,6 +2761,13 @@ class MCPClientConfig(BaseModel):
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
     cwd: str = ""
+    http_timeout: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="HTTP MCP connect/write/pool timeout in seconds; "
+        "raises the read (sse_read_timeout) budget to at least this value. "
+        "None keeps the client default (30s / 300s).",
+    )
     tools: Optional[List[str]] = Field(
         default=None,
         description="Tool whitelist. Only listed tools will be loaded. "
@@ -2519,6 +2792,9 @@ class MCPClientConfig(BaseModel):
 
         if "type" in payload and "transport" not in payload:
             payload["transport"] = payload["type"]
+
+        if "timeout" in payload and "http_timeout" not in payload:
+            payload["http_timeout"] = payload["timeout"]
 
         if (
             "transport" not in payload
@@ -2782,6 +3058,9 @@ class ToolsConfig(BaseModel):
         icon value.
         """
         defaults = _default_builtin_tools()
+        # Retired built-ins must not remain as nonfunctional settings.
+        for name in (f"lsp", f"ast_search"):
+            self.builtin_tools.pop(name, None)
         # Keep persisted configurations from the former stable-track name
         # compatible with the unified browser identity.
         legacy = self.builtin_tools.pop("browser_use", None)
@@ -3130,10 +3409,66 @@ class BrowserConfig(BaseModel):
         return value
 
 
+class ThemeDarkConfig(BaseModel):
+    """Optional theme overrides used when the console is in dark mode."""
+
+    accent: Optional[str] = None
+    accent_bg: Optional[str] = None
+    surface: Optional[str] = None
+
+    @field_validator("accent", "accent_bg", "surface")
+    @classmethod
+    def _validate_color(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not _is_safe_css_color(value):
+            raise ValueError("must be a CSS color")
+        return value.strip() if value is not None else None
+
+
+class ThemeConfig(BaseModel):
+    """User-configurable Console appearance tokens."""
+
+    accent: Optional[str] = None
+    accent_hover: Optional[str] = None
+    accent_bg: Optional[str] = None
+    radius: Optional[str] = None
+    dark: Optional[ThemeDarkConfig] = None
+
+    @field_validator("accent", "accent_hover", "accent_bg")
+    @classmethod
+    def _validate_color(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not _is_safe_css_color(value):
+            raise ValueError("must be a CSS color")
+        return value.strip() if value is not None else None
+
+    @field_validator("radius")
+    @classmethod
+    def _validate_radius(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            value = value.strip()
+            if not _CSS_RADIUS_RE.fullmatch(value):
+                raise ValueError("must be a pixel value or 0")
+        return value
+
+
+class ChannelPluginState(BaseModel):
+    """Host distribution intent, never runtime ownership or credentials."""
+
+    version: int = 0
+    preset: Literal["light", "channels-full"] = "light"
+    legacy_pending: list[str] = Field(default_factory=list)
+    legacy_captured: list[str] = Field(default_factory=list)
+    uninstalled: list[str] = Field(default_factory=list)
+
+
 class Config(BaseModel):
     """Root config (config.json)."""
 
     channels: ChannelConfig = ChannelConfig()
+    channel_plugin_state: ChannelPluginState = Field(
+        default_factory=ChannelPluginState,
+    )
+    channel_send_timeouts: Dict[str, float] = Field(default_factory=dict)
+
     mcp: MCPConfig = MCPConfig()
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     last_api: LastApiConfig = LastApiConfig()
@@ -3142,14 +3477,7 @@ class Config(BaseModel):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     acp: ACPConfig = Field(default_factory=ACPConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
-    powercontext_installation_id: str = Field(
-        default="",
-        max_length=32,
-        description=(
-            "Stable UUID generated on first PowerContext use to isolate "
-            "default scopes across QwenPaw installations"
-        ),
-    )
+    theme: Optional[ThemeConfig] = None
     show_tool_details: bool = True
     user_timezone: str = Field(
         default_factory=detect_system_timezone,
@@ -3169,17 +3497,12 @@ class Config(BaseModel):
         "listed, downloaded to a workspace, and deleted.",
     )
 
-    @field_validator("powercontext_installation_id")
+    @field_validator("channel_send_timeouts", mode="before")
     @classmethod
-    def validate_powercontext_installation_id(cls, value: str) -> str:
-        """Keep the persisted PowerContext installation identity stable."""
-        normalized = value.strip()
-        if normalized and not re.fullmatch(r"[0-9a-f]{32}", normalized):
-            raise ValueError(
-                "powercontext_installation_id must be a 32-character "
-                "lowercase hexadecimal UUID",
-            )
-        return normalized
+    def _validate_channel_send_timeouts(cls, value):
+        from ..channel_protocol.outbound_budget import validate_send_timeouts
+
+        return validate_send_timeouts(value)
 
 
 ChannelConfigUnion = Union[
@@ -3473,15 +3796,14 @@ def load_agent_config(  # pylint: disable=too-many-branches,too-many-statements
         save_agent_config(agent_id, fallback_config)
         return fallback_config
 
-    try:
-        current_fingerprint = _agent_config_fingerprint(agent_config_path)
-    except OSError as exc:
-        raise ConfigurationException(
-            config_key="agent",
-            message=f"Agent '{agent_id}' config is temporarily unavailable",
-        ) from exc
-
     with _agent_config_lock:
+        try:
+            current_fingerprint = _agent_config_fingerprint(agent_config_path)
+        except OSError as exc:
+            raise ConfigurationException(
+                config_key="agent",
+                message=f"Agent '{agent_id}' config is temporarily unavailable",
+            ) from exc
         cached_entry = _agent_config_cache.get(agent_id)
         if (
             isinstance(cached_entry, _AgentConfigCacheEntry)
@@ -3729,6 +4051,12 @@ def save_agent_config(  # pylint: disable=too-many-branches,too-many-statements
 
             payload = candidate.model_dump(exclude_none=True)
             saved_digest = _json_payload_digest(payload)
+            if not candidate.uses_scroll_history:
+                from ..agents.context.scroll.sync import (
+                    invalidate_agent_migration,
+                )
+
+                invalidate_agent_migration(workspace_dir)
             write_json_atomic(agent_config_path, payload)
             candidate.record_source_digest(saved_digest)
             agent_config.record_source_digest(saved_digest)

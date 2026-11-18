@@ -1,3 +1,7 @@
+import {
+  prepareBrowserSession,
+  usesBrowserSession,
+} from "./pawapp-sdk/browserSession";
 /**
  * hostExternals.ts
  *
@@ -9,10 +13,13 @@
  */
 
 import React from "react";
+import type { harnessNamespace } from "./harnesses";
+import i18n from "../i18n";
 import ReactDOM from "react-dom";
-import * as antd from "antd";
-import * as antdIcons from "@ant-design/icons";
-import { getApiUrl, getApiToken } from "../api/config";
+import type * as antd from "antd";
+import type * as antdIcons from "@ant-design/icons";
+import { getHostUiDependencies } from "./hostUiDependencies";
+import { getApiUrl, getApiToken, getApiBaseUrl } from "../api/config";
 import {
   buildAuditNamespace,
   buildMenuNamespace,
@@ -25,6 +32,7 @@ import {
 } from "./registry/sdk";
 import { menuRegistry, routeRegistry } from "./registry/store";
 import type {
+  Localized,
   HostAgentInfo,
   HostSessionInfo,
   HostThemeMode,
@@ -32,8 +40,14 @@ import type {
 } from "./types/qwenpaw";
 import { pawSdkFactory } from "./pawapp-sdk";
 import type { PawSdkFactory } from "./pawapp-sdk/types";
-
-declare const VITE_API_BASE_URL: string;
+import {
+  memoryBackendNamespace,
+  type MemoryBackendNamespace,
+} from "./memoryBackends";
+import {
+  settingsSearchNamespace,
+  type SettingsSearchNamespace,
+} from "./settingsSearch";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -48,6 +62,8 @@ export interface HostExternals {
   apiBaseUrl: string;
   getApiUrl: typeof getApiUrl;
   getApiToken: typeof getApiToken;
+  prepareBrowserSession: typeof prepareBrowserSession;
+  usesBrowserSession: typeof usesBrowserSession;
   // ── Hooks + helpers attached later by installHostSdk() ─────────────────────
   useTheme?: () => HostThemeMode;
   useLocale?: () => string;
@@ -55,6 +71,7 @@ export interface HostExternals {
   useCurrentSession?: () => HostSessionInfo | null;
   getSelectedAgentId?: () => string;
   getCurrentSessionId?: () => string | null;
+  openExternalLink?: (url: string) => void;
   fetch?: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
@@ -62,8 +79,10 @@ export interface PluginRouteDeclaration {
   /** Full URL path, e.g. "/plugin/my-plugin/dashboard". */
   path: string;
   component: React.ComponentType;
-  /** Sidebar display label. */
-  label: string;
+  /** Sidebar label, resolved in the current Console language. */
+  label: Localized<string>;
+  /** Optional page/browser title; older declarations retain the path fallback. */
+  title?: Localized<string>;
   /** Emoji or short icon text. */
   icon?: string;
   /** Lower number = appears earlier in sidebar. Defaults to 0. */
@@ -195,6 +214,12 @@ export interface WindowNamespace {
   audit?: QwenPawAuditNamespace;
   /** App-scoped PawApp SDK. */
   paw?: PawSdkFactory;
+  /** Memory backend configuration UI contributed by memory plugins. */
+  memoryBackends?: MemoryBackendNamespace;
+  /** Backend-owned settings, attached by installHostSdk(). */
+  harnesses?: typeof harnessNamespace;
+  /** Searchable settings metadata contributed by plugins. */
+  settingsSearch?: SettingsSearchNamespace;
 }
 
 declare global {
@@ -231,9 +256,6 @@ function ensurePluginsGroup(): void {
 }
 
 export function installHostExternals(): void {
-  const apiBaseUrl =
-    typeof VITE_API_BASE_URL !== "undefined" ? VITE_API_BASE_URL : "";
-
   if (!window.QwenPaw) {
     (window as any).QwenPaw = {} as WindowNamespace;
   }
@@ -242,11 +264,19 @@ export function installHostExternals(): void {
     window.QwenPaw.host = {
       React,
       ReactDOM,
-      antd,
-      antdIcons,
-      apiBaseUrl,
+      get antd() {
+        return getHostUiDependencies().antd;
+      },
+      get antdIcons() {
+        return getHostUiDependencies().antdIcons;
+      },
+      get apiBaseUrl() {
+        return getApiBaseUrl();
+      },
       getApiUrl,
       getApiToken,
+      prepareBrowserSession,
+      usesBrowserSession,
     };
   }
 
@@ -256,6 +286,12 @@ export function installHostExternals(): void {
   if (!window.QwenPaw.slot) window.QwenPaw.slot = buildSlotNamespace();
   if (!window.QwenPaw.audit) window.QwenPaw.audit = buildAuditNamespace();
   if (!window.QwenPaw.paw) window.QwenPaw.paw = pawSdkFactory;
+  if (!window.QwenPaw.memoryBackends) {
+    window.QwenPaw.memoryBackends = memoryBackendNamespace;
+  }
+  if (!window.QwenPaw.settingsSearch) {
+    window.QwenPaw.settingsSearch = settingsSearchNamespace;
+  }
 
   // ── Back-compat shim ───────────────────────────────────────────────────
   // Legacy registerRoutes(pluginId, routes[]) fans out to:
@@ -274,6 +310,16 @@ export function installHostExternals(): void {
           id,
           path: r.path,
           component: r.component,
+          meta:
+            r.title === undefined
+              ? undefined
+              : {
+                  domain: "extensions",
+                  title: r.title,
+                  scope: "global",
+                  layout: "standard",
+                  navigation: "settings",
+                },
         });
 
         // PawApp pages are surfaced only in the App Center — never as a
@@ -281,11 +327,15 @@ export function installHostExternals(): void {
         if (/^\/apps\//.test(r.path)) continue;
 
         ensurePluginsGroup();
+        const label = r.label;
         menuRegistry.add(pluginId, {
           id,
           location: "primary.settings",
           parentId: "plugins-group",
-          label: r.label,
+          label:
+            typeof label === "function"
+              ? () => label(i18n.resolvedLanguage ?? i18n.language ?? "en")
+              : label,
           // Emoji string in original API → wrap to match prior Sidebar font-size styling.
           icon: React.createElement(
             "span",

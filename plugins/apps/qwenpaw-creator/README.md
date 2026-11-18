@@ -37,10 +37,15 @@ Before your first project, open **Model Configuration** at the lower right of th
 | Scenario                            | Required capabilities                     | Role in the workflow                                             |
 | ----------------------------------- | ----------------------------------------- | ---------------------------------------------------------------- |
 | Every scenario                      | LLM (required)                            | The brain for creative planning, storyboards, and Agent dialogue |
-| Short drama / general generation    | Image generation + video generation + VLM | Generate frames and video; use VLM for visual quality review     |
+| Script-only short drama             | LLM                                       | Draft and revise the script before configuring media models       |
+| Short drama media production / general generation | Image generation + video generation + VLM | Generate frames and video; use VLM for visual quality review |
 | Editing / uploaded sources          | VLM                                       | Understand uploaded image and video content                      |
 | Sources with speech / transcription | ASR                                       | Turn speech into text for editing and subtitles                  |
 | Voice-over / digital-human delivery | TTS + digital human                       | Synthesize narration and dialogue; drive talking-video segments  |
+
+New short dramas default to **Write the script first**. Images and videos stay paused in every execution mode until you choose **Confirm script and enable production** in the blueprint. Confirmation applies to the saved script version; later edits to the script itself (episode title, synopsis, description or the script draft) pause media again, while shot breakdown and per-shot direction after confirmation do not. You can opt into full production at project creation by clearing this choice. Existing projects retain their previous behavior and can use **Return to script stage**.
+
+Manually regenerating an image or video pauses its downstream work. Regenerate the next node explicitly or use **Continue production** when you want the rest of the workflow to resume. A queued video blocked before submission is retried with current inputs instead of sending an old frozen storyboard.
 
 The current model matrix is grouped by capability:
 
@@ -51,7 +56,8 @@ The current model matrix is grouped by capability:
   - DashScope / Bailian: `wan3.0-video` and `wan3.0-video-prime` are All-in-One models — the same model ID handles t2v / i2v / r2v; `wan2.7` and `happyhorse-1.1` automatically select t2v / i2v / r2v from the element type; Bailian also hosts the `kling/kling-v3-*` and `vidu/viduq3-*_reference2video` families;
   - Volcano Engine: `doubao-seedance-2-5-260628` (up to 30s, omni reference of up to 30 images + 10 videos) and the documented `doubao-seedance-2-0-*` IDs;
   - Google Gemini: `veo-3.1` (4/6/8s, forced to 8s with reference images or 1080p/4k output, up to 3 reference images);
-  - MiniMax Hailuo: `MiniMax-Hailuo-2.3` and siblings (768P at 6/10s, 1080P at 6s); subject reference is served by `S2V-01` only;
+  - MiniMax Hailuo: `MiniMax-Hailuo-2.3` and siblings (768P at 6/10s, 1080P at 6s); subject reference is served by `S2V-01` only; `MiniMax-H3` / `MiniMax-H3-Max` speak the v2 content API (480P/768P/2K, 4-15s, omni reference of up to 9 images + 3 videos + 3 audio clips);
+  - MiniMax H3 self-hosted (SGLang): the open-weight `MiniMaxAI/MiniMax-H3` checkpoint served via `sglang serve --model-variant fl2va|ref2va`; one instance loads one variant, so the configured model name records it — `MiniMax-H3-FL2VA` (t2v/i2v) or `MiniMax-H3-Ref2VA` (omni-reference r2v); 768P output only, API key optional;
   - Kling official: `kling-3.0-omni` (reference-to-video, up to 7 reference images) and `kling-2.6` (t2v/i2v only, 5s or 10s);
   - Vidu official: capability is exact-model-specific — `viduq3-turbo` supports t2v/i2v/r2v, while `viduq3-mix` and `viduq3` are r2v-only, `viduq2-pro` is i2v/r2v, and `viduq2` is t2v/r2v;
   - Kling and Vidu are available both through Bailian hosting and their official APIs — **the protocol selected in the model configuration decides the channel**;
@@ -165,3 +171,36 @@ Before a paid image or video generation call, the Agent presents a **production 
 Open **Apps** in the QwenPaw console, find **QwenPaw Creator**, and select Install. After installation, open Creator directly from Apps.
 
 Creator uses a few local tools without changing your system installation: `ffmpeg` handles media processing and composition (set `CREATOR_FFMPEG_PATH`, otherwise it falls back to system `ffmpeg` or `imageio-ffmpeg`); `jq` supports structured Agent edits to project files (`CREATOR_JQ_PATH` or `PATH`). If a dependency is missing, Creator starts in degraded mode; inspect `GET /api/qwenpaw-creator/health` for details.
+
+### Context budget for long sessions
+
+Before every model request Creator measures the input once. When it is too
+large, older tool exchanges are compacted first and only then is media the
+runtime can observe again demoted. Set these when starting the process; a
+change needs a restart.
+
+- `CREATOR_MODEL_CONTEXT_TOKENS`: an explicit **maximum input tokens**
+  override for the model this deployment uses. By default Creator resolves the
+  window from the same host catalog the platform scroll reads (an unknown model
+  falls back to 128k), so in a normal QwenPaw install the token gate is already
+  on and predicts the provider's window refusal; the serialized request size
+  (384KB) is a transport floor, not the guard. Declare this only when the
+  catalog is wrong for your endpoint. With a window in hand, an input over it
+  gives way early, and a request that still does not fit after every media
+  block has been demoted ends with `MODEL_CONTEXT_UNFIT` and waits for shorter
+  input instead of replaying. The reply reserve is `min(4096, 5%)` of the
+  window (about 3.2% at 128k, about 0.4% at 1M), matching the platform scroll.
+- `CREATOR_MEDIA_OBSERVATION_DEGRADE_ENABLED`: set to `0` to switch the media
+  demotion ladder off and take the hard failure with its full diagnostics.
+- `CREATOR_MEDIA_CLAMP_RATIO`: the share of the budget one inline media part
+  may be charged for, default `0.5`, accepted range `0.05`-`1`.
+- `CREATOR_CONTINUATION_SUMMARY_ENABLED`: set to `0` to skip the prose
+  continuation summary (one extra model turn) read beside the archived seq
+  recall map; the map alone already guarantees nothing is lost. Default on.
+
+Known boundary: media that reaches the request as a URL (a DashScope
+temporary OSS object, a public asset address) is neither charged to this
+budget nor demotable - it costs a few hundred bytes on the wire while the
+provider still bills full vision tokens. Deployments using that transport
+should confirm the resolved window covers the model, declaring
+`CREATOR_MODEL_CONTEXT_TOKENS` when the catalog does not.

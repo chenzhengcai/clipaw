@@ -49,12 +49,26 @@ from domain.errors import (
     StorageIntegrityError,
     ValidationError,
 )
+from models.config import is_self_review_enabled
+from services.media_files.informal_launch_template import (
+    informal_launch_uses_uploaded_bgm,
+    compile_informal_launch_captions,
+    informal_launch_copy_matches,
+    normalize_informal_launch_html,
+    reject_informal_launch_fallback,
+)
 from services.media_files.overlay import (
     PET_OS_VIBES,
     render_interview_summary_overlay,
     render_pet_os_overlay,
 )
 from services.media_files.motion_engine import full_engine_digest
+from services.media_files.task_scratch import (
+    link_asset_into_scratch,
+    release_scratch_file,
+    stamp_scratch_baseline,
+    terminal_release_listener,
+)
 from services.media_files.motion_overlay import (
     PreparedMotionLayer,
     caption_layout_error,
@@ -67,7 +81,18 @@ from services.media_files.beat_grid import (
     BeatGridUnavailable,
     extract_beat_grid,
 )
-from services.media_files.motion_templates import render_caption_template
+from services.media_files.motion_blueprints import (
+    subtitle_pack_animation,
+    subtitle_pack_typography,
+)
+from services.media_files.motion_design import (
+    caption_animation_for_compose,
+    caption_animation_override,
+)
+from services.media_files.motion_templates import (
+    DEFAULT_CAPTION_LOCATION,
+    render_caption_template,
+)
 from services.media_files.transitions import (
     SUPPORTED_XFADE_KINDS,
     TransitionClip,
@@ -119,7 +144,7 @@ from services.runtime_files.atomic_store import (
     AtomicJsonRecordStore,
     canonical_json_bytes,
 )
-from services.runtime_files.errors import RecordNotFoundError
+from services.runtime_files.errors import LockTimeoutError, RecordNotFoundError
 from services.runtime_files.execution_models import (
     SpecialistRunRecord,
     TaskAttemptStatus,
@@ -131,6 +156,7 @@ from services.runtime_files.execution_store import (
     ProjectExecutionStore,
 )
 from services.runtime_files.models import ChangeOrigin, ReviewPolicy
+from services.runtime_files.path_safety import is_link_stat, is_link_path
 from services.runtime_files.media_probe import MediaProbeError, probe_media
 from services.runtime_files.runtime_dependencies import resolve_ffmpeg
 
@@ -198,7 +224,7 @@ _DUCK_VOLUME = 0.35
 # BGM plays as one continuous low bed under the whole mix; the fixed bed
 # gain keeps music from competing with native dialogue and ambience.
 _BGM_BED_GAIN_DB = -12.0
-# BGM volume while any speech window (shot dialogue, s2v, narration) plays.
+# BGM volume during explicit speech windows (s2v, narration).
 _BGM_DUCK_VOLUME = 0.4
 # Unset bgm fades default to min(this, span/4): musical edges for a long
 # bed without swallowing a short segment. Explicit creation fades win.
@@ -236,6 +262,7 @@ class LocalMediaInput:
     media_type: str
     path: Path
     source_ref: str
+    mutable: bool = False
     start_seconds: float | None = None
     end_seconds: float | None = None
     duration_seconds: float | None = None
@@ -264,10 +291,11 @@ class LocalMediaExecutionSpec:
     canvas_size: tuple[int, int]
     on_element_done: Callable[[int, int], None] | None = None
     audio_tracks: tuple[Mapping[str, Any], ...] = ()
-    # [start, end) seconds where clips natively speak (shot dialogue, s2v);
+    # [start, end) seconds where clips have explicit driving voice (s2v);
     # BGM ducks itself inside these windows.
     speech_windows: tuple[tuple[float, float], ...] = ()
     color_grade: str = ""
+    replace_native_audio: bool = False
 
 
 def _input_render_element_ids(item: LocalMediaInput) -> frozenset[str]:
@@ -708,7 +736,7 @@ class FfmpegLocalMediaRunner:
         composed video's own audio (when present) without renormalization.
         Roles keep the three sound layers apart: narration ducks the footage
         audio under it, bgm plays as one continuous low bed that ducks itself
-        under every speech window (native dialogue, s2v, narration), and sfx
+        under explicit speech windows and the produced footage audio. Sfx
         mixes verbatim.
         """
 
@@ -717,6 +745,7 @@ class FfmpegLocalMediaRunner:
         arguments: list[str] = ["-y", "-i", os.fspath(premix)]
         filters: list[str] = []
         labels: list[str] = []
+        music_labels: list[str] = []
         narration_windows: list[tuple[float, float]] = []
         for track in spec.audio_tracks:
             # Tracks predating the role key always ducked the footage audio,
@@ -780,9 +809,44 @@ class FfmpegLocalMediaRunner:
                     )
             label = f"[mix{index}]"
             filters.append(",".join(chain) + label)
-            labels.append(label)
-        if self._probe_has_audio(premix):
-            base_chain = ["[0:a]aformat=channel_layouts=stereo"]
+            (music_labels if role == "bgm" else labels).append(label)
+        has_native_audio = (
+            not spec.replace_native_audio and self._probe_has_audio(premix)
+        )
+        if music_labels and has_native_audio:
+            # Read the already composed sound, so edits, retiming and
+            # transitions have the same clock as the final picture. This is
+            # audio-driven ducking, not inferred speech timestamps or ASR.
+            filters.append("[0:a]asplit=2[native][duck]")
+            detector = [
+                "[duck]aformat=channel_layouts=stereo",
+                "highpass=f=100",
+                "lowpass=f=4000",
+            ]
+            for start, end in bgm_duck_windows:
+                # These intervals already apply a fixed reduction above.
+                detector.append(
+                    f"volume=0:enable='between(t,{start:.3f},{end:.3f})'",
+                )
+            # A short native audio stream must not cut off the music bed.
+            filters.append(",".join(detector) + ",apad[ducking]")
+            music = music_labels[0]
+            if len(music_labels) > 1:
+                filters.append(
+                    f"{''.join(music_labels)}amix=inputs={len(music_labels)}"
+                    ":duration=longest:normalize=0[music]",
+                )
+                music = "[music]"
+            filters.append(
+                f"{music}[ducking]sidechaincompress=threshold=0.03:ratio=6"
+                ":attack=15:release=300:mix=0.65[bgm]",
+            )
+            labels.append("[bgm]")
+        else:
+            labels.extend(music_labels)
+        if has_native_audio:
+            native = "[native]" if music_labels else "[0:a]"
+            base_chain = [f"{native}aformat=channel_layouts=stereo"]
             for start, end in _merge_windows(narration_windows):
                 base_chain.append(
                     f"volume={_DUCK_VOLUME}:enable="
@@ -809,6 +873,11 @@ class FfmpegLocalMediaRunner:
         self._run(
             [
                 *arguments,
+                # Audio branches share their source with the sidechain.
+                # Serial scheduling avoids dropped tail samples when amix
+                # and sidechaincompress consume different frame sizes.
+                "-filter_complex_threads",
+                "1",
                 "-filter_complex",
                 ";".join(filters),
                 "-map",
@@ -825,6 +894,9 @@ class FfmpegLocalMediaRunner:
             ],
             cwd=spec.work_dir,
         )
+        # The mix wrote a fresh delivery, so the renamed predecessor is a full
+        # second copy of the film with no reader left.
+        release_scratch_file(premix, reason="superseded-by-audio-mix")
 
     def _probe_has_audio(self, path: Path) -> bool:
         try:
@@ -1436,14 +1508,20 @@ class FfmpegLocalMediaRunner:
             motion = overlay.get("motion")
             render_location = overlay.get("location")
             using_safe_motion = False
+            copy_matches = (
+                informal_launch_copy_matches
+                if overlay.get("caption_template") == "informal_launch"
+                else _motion_document_matches_text
+            )
             if (
                 isinstance(motion, Mapping)
                 and str(motion.get("html") or "").strip()
-                and not _motion_document_matches_text(
+                and not copy_matches(
                     str(motion["html"]),
                     str(overlay.get("text") or ""),
                 )
             ):
+                reject_informal_launch_fallback(overlay, "动效文档与当前文案不一致")
                 motion = None
                 styled_error = (
                     f"{overlay['kind']} 动效文档与当前文案不一致，" "已用回退样式渲染最新文案"
@@ -1452,10 +1530,14 @@ class FfmpegLocalMediaRunner:
                 isinstance(motion, Mapping)
                 and str(motion.get("html") or "").strip()
             ):
-                safety_error = caption_layout_error(
-                    render_location,
-                    str(overlay.get("text") or ""),
-                    video_size,
+                safety_error = (
+                    None
+                    if overlay.get("caption_template") == "informal_launch"
+                    else caption_layout_error(
+                        render_location,
+                        str(overlay.get("text") or ""),
+                        video_size,
+                    )
                 )
                 if safety_error is None:
                     location = render_location
@@ -1486,31 +1568,18 @@ class FfmpegLocalMediaRunner:
                     elif probe.text_occlusion > 0.10:
                         safety_error = "字幕文字被卡片内的图标或装饰遮挡"
                 if safety_error is not None:
-                    fallback_w = (
-                        float(render_location.get("width", 0.8))
-                        if isinstance(render_location, Mapping)
-                        else 0.8
-                    )
-                    fallback_h = (
-                        float(render_location.get("height", 0.25))
-                        if isinstance(render_location, Mapping)
-                        else 0.25
-                    )
+                    reject_informal_launch_fallback(overlay, safety_error)
                     render_location = {
-                        "x": 0.5,
-                        "y": 0.88,
-                        "width": 0.8,
-                        "height": 0.25,
-                        "anchor_x": 0.5,
-                        "anchor_y": 0.5,
+                        **DEFAULT_CAPTION_LOCATION,
                         "opacity": 1.0,
                     }
                     motion = {
                         "html": render_caption_template(
                             str(overlay.get("text") or ""),
                             emotion=str(overlay.get("vibe") or "chill"),
-                            box_width=fallback_w,
-                            box_height=fallback_h,
+                            box_width=render_location["width"],
+                            box_height=render_location["height"],
+                            **_caption_fallback_style_kwargs(overlay),
                         ),
                         "fps": 24,
                         "loop": False,
@@ -1533,7 +1602,13 @@ class FfmpegLocalMediaRunner:
                     appear_at=overlay["appear_at"],
                     duration=overlay["duration"],
                     location=render_location,
-                    viewport_inset=0.05,
+                    # Template documents passed the actual render probe.
+                    # Legacy safety CSS must not override custom lettering.
+                    viewport_inset=(
+                        0.0
+                        if overlay.get("caption_template") == "informal_launch"
+                        else 0.05
+                    ),
                     doc_format=str(motion.get("format") or "html_css"),
                     # Caption cards may bleed background blocks off their
                     # box on purpose; readability is guarded by the
@@ -1545,25 +1620,14 @@ class FfmpegLocalMediaRunner:
                         (prep.layer, styled_error, overlay, render_location),
                     )
                     continue
+                reject_informal_launch_fallback(
+                    overlay,
+                    prep.error or "动效层生成失败",
+                )
                 if not using_safe_motion:
                     generated_error = prep.error or "未知错误"
-                    fallback_w = (
-                        float(render_location.get("width", 0.8))
-                        if isinstance(render_location, Mapping)
-                        else 0.8
-                    )
-                    fallback_h = (
-                        float(render_location.get("height", 0.25))
-                        if isinstance(render_location, Mapping)
-                        else 0.25
-                    )
                     render_location = {
-                        "x": 0.5,
-                        "y": 0.88,
-                        "width": 0.8,
-                        "height": 0.25,
-                        "anchor_x": 0.5,
-                        "anchor_y": 0.5,
+                        **DEFAULT_CAPTION_LOCATION,
                         "opacity": 1.0,
                     }
                     safe_prep = prepare_motion_layer(
@@ -1571,8 +1635,9 @@ class FfmpegLocalMediaRunner:
                         html=render_caption_template(
                             str(overlay.get("text") or ""),
                             emotion=str(overlay.get("vibe") or "chill"),
-                            box_width=fallback_w,
-                            box_height=fallback_h,
+                            box_width=render_location["width"],
+                            box_height=render_location["height"],
+                            **_caption_fallback_style_kwargs(overlay),
                         ),
                         fps=24,
                         loop=False,
@@ -1628,6 +1693,11 @@ class FfmpegLocalMediaRunner:
     ) -> None:
         """Burn one fixed-style caption; failure aborts the composition."""
 
+        reject_informal_launch_fallback(
+            overlay,
+            styled_error or "模板动效文档缺失",
+        )
+
         rendered = segment.with_name(f"{segment.stem}-overlay.mp4")
         if overlay["kind"] == "pet_os":
             result = render_pet_os_overlay(
@@ -1653,7 +1723,9 @@ class FfmpegLocalMediaRunner:
                 video_size=video_size,
                 appear_at=overlay["appear_at"],
                 duration=overlay["duration"],
-                location=overlay.get("location"),
+                location=render_location,
+                style=overlay.get("subtitle_style"),
+                subtitle_template=overlay.get("subtitle_template"),
             )
         if not result.success:
             rendered.unlink(missing_ok=True)
@@ -1894,6 +1966,8 @@ class FfmpegLocalMediaRunner:
         vibe = str(raw.get("vibe") or "chill").strip().casefold()
         return {
             "kind": kind,
+            "element_id": str(raw.get("element_id") or ""),
+            "caption_template": raw.get("caption_template"),
             "text": text,
             "vibe": vibe if vibe in PET_OS_VIBES else "chill",
             "appear_at": appear_at,
@@ -1906,6 +1980,24 @@ class FfmpegLocalMediaRunner:
             "motion": (
                 dict(raw["motion"])
                 if isinstance(raw.get("motion"), Mapping)
+                else None
+            ),
+            # Carry the project's subtitle-bar overrides through
+            # normalisation so the plain-subtitle renderer can apply them.
+            "subtitle_style": (
+                dict(raw["subtitle_style"])
+                if isinstance(raw.get("subtitle_style"), Mapping)
+                else None
+            ),
+            # ...and the chosen style pack, whose typography the fallback PNG
+            # has to agree with.
+            "subtitle_template": raw.get("subtitle_template"),
+            # ...and the caption's own entrance/exit/loop pick, so a
+            # compose-time fallback burns the animation the user chose
+            # instead of silently reverting to the pack's signature motion.
+            "caption_animation": (
+                dict(raw["caption_animation"])
+                if isinstance(raw.get("caption_animation"), Mapping)
                 else None
             ),
         }
@@ -2154,7 +2246,9 @@ class FfmpegLocalMediaRunner:
             return None
         tail = process.stderr[process.stderr.rfind("{") :]
         try:
-            measured = json.loads(tail)
+            # Recent ffmpeg versions print muxer/progress lines after the
+            # loudnorm object. Parse the object without consuming that log.
+            measured, _ = json.JSONDecoder().raw_decode(tail)
         except ValueError:
             return None
         keys = (
@@ -2225,7 +2319,7 @@ class FfmpegLocalMediaRunner:
         # the true-peak ceiling. Make that observable.
         tail = (stderr or "")[max((stderr or "").rfind("{"), 0) :]
         try:
-            applied = json.loads(tail)
+            applied, _ = json.JSONDecoder().raw_decode(tail)
         except ValueError:
             applied = {}
         if applied.get("normalization_type", "").lower() != "linear":
@@ -2234,6 +2328,7 @@ class FfmpegLocalMediaRunner:
                 "layer levels may pump",
                 spec.output_path.name,
             )
+        release_scratch_file(preloud, reason="superseded-by-loudnorm")
         return None
 
     def _run(self, arguments: Sequence[str], *, cwd: Path) -> str:
@@ -2310,6 +2405,9 @@ class _FrozenInput:
     source_ref: str
     media_type: str
     source_url: str | None = None
+    # An input a consumer rewrites in place must stay a private copy; the
+    # default shares bytes with the stored Artifact instead.
+    mutable: bool = False
     start_seconds: float | None = None
     end_seconds: float | None = None
     duration_seconds: float | None = None
@@ -2361,6 +2459,7 @@ class _ResolvedExecution:
     audio_tracks: tuple[_FrozenAudioTrack, ...] = ()
     speech_windows: tuple[tuple[float, float], ...] = ()
     color_grade: str = ""
+    replace_native_audio: bool = False
 
 
 def _stable_id(prefix: str, project_id: str, key: str) -> str:
@@ -2430,7 +2529,7 @@ def _require_real_directory(path: Path) -> None:
         raise StorageIntegrityError(
             f"Runtime task-work 父目录不存在: {path}",
         ) from exc
-    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISDIR(path_stat.st_mode):
+    if is_link_stat(path_stat) or not stat.S_ISDIR(path_stat.st_mode):
         raise StorageIntegrityError(f"Runtime task-work 路径不安全: {path}")
 
 
@@ -2457,6 +2556,26 @@ def _ensure_real_directory_chain(root: Path, *segments: str) -> Path:
         _require_real_directory(child)
         current = child
     return current
+
+
+def _ensure_task_work_dir(project_root: Path, task_id: str) -> Path:
+    """Allocate one task's scratch and baseline the reclaim sweep for it.
+
+    Allocation is where a baseline has to be recorded: a Project can arrive
+    through creation, copy, an archive import or an example install, and only
+    this path is guaranteed to run before the first byte of scratch.  The
+    stamp is idempotent and stays later than whatever the Project came with,
+    so imported leftovers keep their protected-history treatment.
+    """
+
+    work_dir = _ensure_real_directory_chain(
+        project_root,
+        "runtime",
+        "task-work",
+        task_id,
+    )
+    stamp_scratch_baseline(Path(project_root))
+    return work_dir
 
 
 def _indexed_version(
@@ -2575,6 +2694,44 @@ def _motion_document_matches_text(html: str, text: str) -> bool:
     return needle in re.sub(r"\s+", "", plain)
 
 
+def _caption_fallback_style_kwargs(
+    overlay: Mapping[str, Any],
+) -> dict[str, Any]:
+    """What the last-resort caption template must burn in for one overlay.
+
+    A compose-time fallback is still the final cut: when the user picked a
+    style pack, a plain white bar under a description that says 综艺花字 would
+    recreate exactly the mismatch the subtitle style route removes.  The same
+    reasoning covers the entrance triple, so a caption that carries its own
+    ``caption_animation=`` pick keeps it here instead of dropping back to the
+    pack's signature motion — the field report this answers was "the animation
+    setting did nothing", which was really the fallback ignoring the pick.
+    Nothing picked hands back no kwargs, so the historical document is
+    reproduced byte-for-byte (``render_caption_template`` defaults *are* the
+    legacy look).
+    """
+
+    pack_id = str(overlay.get("subtitle_template") or "") or None
+    style = overlay.get("subtitle_style")
+    style_map = dict(style) if isinstance(style, Mapping) and style else None
+    stamped = overlay.get("caption_animation")
+    stamp_map = (
+        dict(stamped) if isinstance(stamped, Mapping) and stamped else None
+    )
+    if pack_id is None and style_map is None and stamp_map is None:
+        return {}
+    kwargs: dict[str, Any] = {
+        "typography": subtitle_pack_typography(pack_id),
+    }
+    if style_map is not None:
+        kwargs["style"] = style_map
+    animation = stamp_map or subtitle_pack_animation(pack_id)
+    kwargs["entrance"] = str(animation["entrance"])
+    kwargs["exit"] = str(animation["exit"])
+    kwargs["loop"] = bool(animation["loop"])
+    return kwargs
+
+
 def _motion_document_payload(
     project: Project,
     motion: Any,
@@ -2641,6 +2798,13 @@ def _edit_overlays(
         ),
         key=lambda candidate: (candidate.z_index, candidate.element_id),
     )
+    compiled = compile_informal_launch_captions(
+        timeline,
+        _canvas_size(
+            project.settings.aspect_ratio,
+            project.settings.resolution,
+        ),
+    )
     result: list[Mapping[str, Any]] = []
     for overlay in overlays:
         intersection_start = max(
@@ -2649,22 +2813,67 @@ def _edit_overlays(
         )
         intersection_end = min(element.span.end_tick, overlay.span.end_tick)
         motion = overlay.creation.motion
+        location = overlay.location
+        template_fields: dict[str, str] = {}
+        if overlay.element_id in compiled:
+            motion, location = compiled[overlay.element_id]
+            template_fields["caption_template"] = "informal_launch"
+            # Invalidate only this template's old forced-preset renders.
+            # Generic subtitle projects retain their existing cache keys.
+            template_fields["caption_renderer"] = "authored-v1"
+        # This caption's own motion pick, resolved while the model is still
+        # here: the compose worker only sees this dumped line, and the
+        # last-resort caption template would otherwise replay the pack's
+        # signature instead of what the user chose.  Absent for captions this
+        # pipeline never drew (and for the 发布会 template, which owns its
+        # lettering), so an untouched project keeps the fingerprint it had.
+        caption_animation = (
+            None
+            if template_fields
+            else caption_animation_for_compose(
+                motion,
+                project.settings.subtitle_template,
+                caption_animation_override(project.settings),
+            )
+        )
         result.append(
             {
+                **template_fields,
                 # Fixed fallback styling tag: overlay roles derive from
                 # data (non-empty text = caption).  vibe="summary" is the
                 # migrated interview_summary presentation and keeps the
                 # interview card fallback instead of the pet-OS bubble.
+                # Pet-OS bubble (with animal emoji) is only used when the
+                # project content_type is "pets"; otherwise fall back to
+                # the plain interview_summary card style.
                 "kind": (
-                    "interview_summary"
-                    if overlay.creation.vibe == "summary"
-                    else "pet_os"
+                    "pet_os"
+                    if overlay.creation.vibe != "summary"
+                    and project.settings.content_type == "pets"
+                    else "interview_summary"
                 ),
                 "text": overlay.creation.text,
                 "vibe": overlay.creation.vibe,
+                # Per-project subtitle-bar overrides (colour / font size /
+                # outline).  Consumed by the deterministic plain-subtitle
+                # renderer; designed motion documents ignore it.
+                "subtitle_style": (
+                    project.settings.subtitle_style.model_dump(mode="json")
+                    if project.settings.subtitle_style is not None
+                    else None
+                ),
+                # The style pack belongs in the render fingerprint too: an
+                # overlay without a motion document still burns the pack's
+                # typography into the last-resort PNG.
+                "subtitle_template": project.settings.subtitle_template,
+                **(
+                    {"caption_animation": caption_animation}
+                    if caption_animation is not None
+                    else {}
+                ),
                 "location": (
-                    overlay.location.model_dump(mode="json")
-                    if overlay.location is not None
+                    location.model_dump(mode="json")
+                    if location is not None
                     else None
                 ),
                 "motion": (
@@ -3033,7 +3242,6 @@ def _timeline_execution(
         end_seconds: float | None = None
         if isinstance(element.creation, EditCreation):
             assert isinstance(render_source, SourceVersionRenderSource)
-            assert not isinstance(render_source, ArtifactVersionRenderSource)
             assert render_source.source_out_tick is not None
             start_seconds = (
                 render_source.source_in_tick / timeline.ticks_per_second
@@ -3220,21 +3428,20 @@ def _timeline_execution(
         audio_tracks=tuple(audio_tracks),
         speech_windows=speech_windows,
         color_grade=timeline.color_grade,
+        replace_native_audio=informal_launch_uses_uploaded_bgm(
+            project,
+            timeline,
+        ),
     )
 
 
 def _timeline_speech_windows(
     timeline: Timeline,
 ) -> tuple[tuple[float, float], ...]:
-    """[start, end) seconds where clips natively speak.
+    """Explicit S2V voice intervals; free-form narrative is not time data.
 
-    Shot-granular for R2V: only the dialogue-bearing shots count, so BGM
-    keeps its bed level through the silent shots of the same element.
-    Shots are placed by scaling their declared durations onto the element
-    span (the provider renders the shot list into exactly the span, so
-    relative durations are the trustworthy signal); the whole element
-    span is the safe fallback when any duration is unusable. s2v digital
-    humans speak for their entire span.
+    The mixer separately ducks BGM from actual composed audio levels, so R2V
+    needs no inferred timestamps from text or retired authoring structures.
     """
 
     windows: list[tuple[float, float]] = []
@@ -3247,30 +3454,6 @@ def _timeline_speech_windows(
         if isinstance(creation, S2VCreation):
             windows.append((element_start, element_end))
             continue
-        if not isinstance(creation, R2VCreation):
-            continue
-        shots = [
-            creation.shots.items[shot_id] for shot_id in creation.shots.order
-        ]
-        if not any(shot.dialogue.strip() for shot in shots):
-            continue
-        total_seconds = sum(shot.duration_seconds for shot in shots)
-        if (
-            any(shot.duration_seconds <= 0 for shot in shots)
-            or total_seconds <= 0
-        ):
-            windows.append((element_start, element_end))
-            continue
-        scale = (element_end - element_start) / total_seconds
-        cursor = element_start
-        for shot in shots:
-            shot_start = cursor
-            cursor = min(
-                cursor + shot.duration_seconds * scale,
-                element_end,
-            )
-            if shot.dialogue.strip() and cursor > shot_start:
-                windows.append((shot_start, cursor))
     return tuple(sorted(windows))
 
 
@@ -3367,7 +3550,19 @@ def _resolved_fingerprint(resolved: _ResolvedExecution) -> str:
             # across overlays with very different box dimensions.
             # v9: Edit playback_rate retimes both picture and source sound;
             # segment and transition durations now stay on Timeline time.
-            "rendererVersion": 9,
+            # v10: loudnorm accepts FFmpeg progress logs after its JSON;
+            # old unnormalized deliveries must not be reused after the fix.
+            # v11: ordinary and safety-fallback captions use borderless
+            # typography, including the last-resort PNG renderer.
+            # v12: the subtitle style pack is drawn, not just suggested —
+            # caption templates paint the pack's typography, plate, glow and
+            # entrance/exit triple, and the fallback PNG agrees with it.
+            "rendererVersion": 12,
+            **(
+                {"informalLaunchAudio": "uploaded-bgm-only-v1"}
+                if resolved.replace_native_audio
+                else {}
+            ),
             "targetRef": resolved.target_ref,
             "inputs": [
                 {
@@ -3437,6 +3632,14 @@ def _resolved_fingerprint(resolved: _ResolvedExecution) -> str:
                     "speechWindows": [
                         list(window) for window in resolved.speech_windows
                     ],
+                    **(
+                        {"bgmDuckingVersion": 1}
+                        if any(
+                            track.role == "bgm"
+                            for track in resolved.audio_tracks
+                        )
+                        else {}
+                    ),
                 }
                 if resolved.audio_tracks
                 else {}
@@ -3548,11 +3751,17 @@ def _materialized_overlay(
     if overlay is None:
         return None
     motion = overlay.get("motion")
-    if not isinstance(motion, Mapping) or motion.get("html"):
+    if not isinstance(motion, Mapping):
         return overlay
+    resolved = _materialized_motion(project, file_store, motion)
+    if overlay.get("caption_template") == "informal_launch":
+        resolved = {
+            **resolved,
+            "html": normalize_informal_launch_html(str(resolved["html"])),
+        }
     return {
         **overlay,
-        "motion": _materialized_motion(project, file_store, motion),
+        "motion": resolved,
     }
 
 
@@ -3570,7 +3779,14 @@ class FileLocalMediaExecutionService:
             raise ValueError("max_output_bytes must be positive")
         self.services = services
         self.runner = runner or FfmpegLocalMediaRunner()
-        self.executions = ProjectExecutionStore(services.root)
+        from services.file_agent_runtime.manual_regeneration_hold import (
+            HoldAwareExecutionStore,
+        )
+
+        self.executions = HoldAwareExecutionStore(
+            services.root,
+            on_task_terminal=terminal_release_listener(services),
+        )
         self.max_output_bytes = max_output_bytes
         self._closed = False
 
@@ -3731,7 +3947,11 @@ class FileLocalMediaExecutionService:
             )
             total_elements = _render_element_total(spec.inputs)
             if spec.on_element_done is not None and total_elements > 0:
-                spec.on_element_done(0, total_elements)
+                await asyncio.to_thread(
+                    spec.on_element_done,
+                    0,
+                    total_elements,
+                )
             runner_output = await self.runner.render(spec)
             published_result = await asyncio.to_thread(
                 self._materialize_and_publish,
@@ -4073,12 +4293,7 @@ class FileLocalMediaExecutionService:
         project_root = self.services.projects.project_root(
             base.project.project_id,
         )
-        work_dir = _ensure_real_directory_chain(
-            project_root,
-            "runtime",
-            "task-work",
-            task.task_id,
-        )
+        work_dir = _ensure_task_work_dir(project_root, task.task_id)
         input_dir = _ensure_real_directory_chain(work_dir, "inputs")
         file_store = AssetFileStore(project_root)
         local_inputs: list[LocalMediaInput] = []
@@ -4110,13 +4325,27 @@ class FileLocalMediaExecutionService:
                 if destination.exists():
                     raise StorageIntegrityError("Task input scratch 已存在")
                 if frozen.indexed is not None:
-                    with (
-                        file_store.open_verified(frozen.indexed) as source,
-                        destination.open("xb") as target,
-                    ):
-                        shutil.copyfileobj(source, target, length=1024 * 1024)
-                        target.flush()
-                        os.fsync(target.fileno())
+                    # Task inputs are the Project's own immutable Artifacts, so
+                    # a hard link is the same bytes without doubling them on
+                    # disk; only an input a consumer must write to stays a
+                    # private copy.
+                    linked = not frozen.mutable and link_asset_into_scratch(
+                        file_store,
+                        frozen.indexed,
+                        destination,
+                    )
+                    if not linked:
+                        with (
+                            file_store.open_verified(frozen.indexed) as source,
+                            destination.open("xb") as target,
+                        ):
+                            shutil.copyfileobj(
+                                source,
+                                target,
+                                length=1024 * 1024,
+                            )
+                            target.flush()
+                            os.fsync(target.fileno())
                 elif frozen.source_url is not None:
                     source_version = (
                         base.project.assets.source_versions_by_id.get(
@@ -4155,6 +4384,7 @@ class FileLocalMediaExecutionService:
                     checksum=frozen.checksum,
                     media_type=frozen.media_type,
                     path=destination,
+                    mutable=frozen.mutable,
                     source_ref=frozen.source_ref,
                     start_seconds=frozen.start_seconds,
                     end_seconds=frozen.end_seconds,
@@ -4253,9 +4483,10 @@ class FileLocalMediaExecutionService:
                         },
                     },
                 )
-            except ExecutionStateConflict:
+            except (ExecutionStateConflict, LockTimeoutError):
                 # Cancellation or another terminal transition won the Runtime
-                # lock; the renderer will observe that state before import.
+                # lock, or a Project writer delayed this optional progress
+                # update. Keep rendering; import rechecks authoritative state.
                 return
 
         spec = LocalMediaExecutionSpec(
@@ -4273,6 +4504,7 @@ class FileLocalMediaExecutionService:
             audio_tracks=tuple(local_audio_tracks),
             speech_windows=resolved.speech_windows,
             color_grade=resolved.color_grade,
+            replace_native_audio=resolved.replace_native_audio,
         )
         AtomicJsonRecordStore(work_dir / "spec.json").write(
             {
@@ -4281,6 +4513,7 @@ class FileLocalMediaExecutionService:
                 "targetRef": resolved.target_ref,
                 "inputGeneration": base.generation,
                 "inputEtag": base.etag,
+                "replaceNativeAudio": resolved.replace_native_audio,
                 "inputs": [
                     {
                         "versionId": item.version_id,
@@ -4336,7 +4569,7 @@ class FileLocalMediaExecutionService:
             output_stat = spec.output_path.lstat()
         except FileNotFoundError as exc:
             raise ValidationError("本地媒体 runner 未生成 output.mp4") from exc
-        if spec.output_path.is_symlink() or not stat.S_ISREG(
+        if is_link_path(spec.output_path) or not stat.S_ISREG(
             output_stat.st_mode,
         ):
             raise StorageIntegrityError("本地媒体输出不是普通文件")
@@ -4419,6 +4652,10 @@ class FileLocalMediaExecutionService:
             "runId": task.run_id,
             "transactionId": ids["transaction_id"],
             "commandType": resolved.command.value,
+            "selfReviewEnabled": (
+                resolved.command is CreatorCommandType.COMPOSE_FINAL_VIDEO
+                and is_self_review_enabled()
+            ),
             "targetRef": resolved.target_ref,
             "indexedFile": indexed.model_dump(mode="json"),
             "artifactVersion": artifact.model_dump(mode="json"),

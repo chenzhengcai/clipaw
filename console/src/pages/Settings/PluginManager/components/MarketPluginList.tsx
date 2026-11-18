@@ -16,6 +16,9 @@ import type {
   MarketPluginEntry,
   MarketPluginSortBy,
 } from "@/api/modules/pluginMarket";
+import type { InstallPluginResult, PluginInfo } from "@/api/modules/plugin";
+import { marketPluginMatches } from "@/utils/marketPluginIdentity";
+import { compareVersions } from "@/layouts/constants";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { openExternalLink } from "@/utils/openExternalLink";
 import { useMarketPlugins } from "../hooks/useMarketPlugins";
@@ -97,13 +100,19 @@ function pickLocalizedDescription(
 }
 
 interface MarketPluginListProps {
-  onInstalled: () => void;
+  onInstalled: (result: InstallPluginResult) => void | Promise<void>;
+  installedPlugins?: PluginInfo[];
+  initialSearch?: string;
 }
 
-export function MarketPluginList({ onInstalled }: MarketPluginListProps) {
+export function MarketPluginList({
+  onInstalled,
+  installedPlugins = [],
+  initialSearch = "",
+}: MarketPluginListProps) {
   const { t, i18n } = useTranslation();
-  const [searchInput, setSearchInput] = useState("");
-  const [activeSearch, setActiveSearch] = useState("");
+  const [searchInput, setSearchInput] = useState(initialSearch);
+  const [activeSearch, setActiveSearch] = useState(initialSearch);
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
   const isMobile = useIsMobile();
 
@@ -129,9 +138,13 @@ export function MarketPluginList({ onInstalled }: MarketPluginListProps) {
     handleLoadMore,
     handleRetryLoadMore,
     handleInstall,
-  } = useMarketPlugins({ onInstalled });
+  } = useMarketPlugins({ onInstalled, initialSearch });
 
   const lang = i18n.language.split("-")[0].toLowerCase();
+  const getInstalledVersion = (entry: MarketPluginEntry) => {
+    return installedPlugins.find((plugin) => marketPluginMatches(plugin, entry))
+      ?.version;
+  };
 
   const onSearch = (val: string) => {
     setActiveSearch(val);
@@ -174,13 +187,26 @@ export function MarketPluginList({ onInstalled }: MarketPluginListProps) {
       }
     >
       <Button
-        type="primary"
+        type={
+          getInstalledVersion(entry) &&
+          compareVersions(entry.version, getInstalledVersion(entry)!) <= 0
+            ? "default"
+            : "primary"
+        }
         icon={<Download size={14} />}
         loading={installingId === entry.id}
-        disabled={installingId !== null && installingId !== entry.id}
+        disabled={
+          (Boolean(getInstalledVersion(entry)) &&
+            compareVersions(entry.version, getInstalledVersion(entry)!) <= 0) ||
+          (installingId !== null && installingId !== entry.id)
+        }
         onClick={() => requestInstall(entry)}
       >
-        {t("pluginManager.catalogInstall")}
+        {getInstalledVersion(entry)
+          ? compareVersions(entry.version, getInstalledVersion(entry)!) > 0
+            ? t("pluginManager.update")
+            : t("pluginManager.catalogInstalled")
+          : t("pluginManager.catalogInstall")}
       </Button>
     </Tooltip>
   );
@@ -247,7 +273,9 @@ export function MarketPluginList({ onInstalled }: MarketPluginListProps) {
           </button>
         ))}
       </div>
-      <div className={toolbarStyles.controlRow}>
+      <div
+        className={`${toolbarStyles.controlRow} ${toolbarStyles.controlRowMarket}`}
+      >
         <Input.Search
           className={toolbarStyles.search}
           placeholder={t("pluginManager.marketSearch")}
@@ -302,7 +330,12 @@ export function MarketPluginList({ onInstalled }: MarketPluginListProps) {
         />
       )}
 
-      <Spin spinning={loading}>
+      <Spin spinning={loading && plugins.length > 0}>
+        {loading && plugins.length === 0 && (
+          <div className={marketStyles.loadingSpin}>
+            <Spin size="large" />
+          </div>
+        )}
         {!loading && plugins.length === 0 && !error && (
           <Text type="secondary">{t("pluginManager.marketEmpty")}</Text>
         )}

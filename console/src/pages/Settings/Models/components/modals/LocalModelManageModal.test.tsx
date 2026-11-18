@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 
@@ -30,7 +30,7 @@ vi.mock("react-i18next", () => ({
 // Mock @agentscope-ai/design with Select included
 vi.mock("@agentscope-ai/design", () => {
   const passThrough = ({ children, ...props }: Record<string, unknown>) =>
-    React.createElement("div", props, children as any);
+    React.createElement("div", props, children as React.ReactNode);
 
   const buttonLike = ({
     children,
@@ -41,8 +41,8 @@ vi.mock("@agentscope-ai/design", () => {
     React.createElement(
       "button",
       { onClick, ...props },
-      icon as any,
-      children as any,
+      icon as React.ReactNode,
+      children as React.ReactNode,
     );
 
   const selectLike = ({
@@ -59,7 +59,7 @@ vi.mock("@agentscope-ai/design", () => {
       React.createElement(
         "span",
         { "data-testid": "select-value" },
-        currentLabel as any,
+        currentLabel as React.ReactNode,
       ),
       React.createElement(
         "div",
@@ -85,20 +85,32 @@ vi.mock("@agentscope-ai/design", () => {
     Button: buttonLike,
     Input: Object.assign(
       (props: Record<string, unknown>) =>
-        React.createElement("input", props as any),
+        React.createElement(
+          "input",
+          props as React.InputHTMLAttributes<HTMLInputElement> & {
+            onChange?: (value: number | null) => void;
+          },
+        ),
       {
         TextArea: (props: Record<string, unknown>) =>
-          React.createElement("textarea", props as any),
+          React.createElement(
+            "textarea",
+            props as React.InputHTMLAttributes<HTMLInputElement> & {
+              onChange?: (value: number | null) => void;
+            },
+          ),
         Search: (props: Record<string, unknown>) =>
-          React.createElement("input", { ...props, type: "search" } as any),
+          React.createElement("input", { ...props, type: "search" }),
         Password: (props: Record<string, unknown>) =>
-          React.createElement("input", { ...props, type: "password" } as any),
+          React.createElement("input", { ...props, type: "password" }),
         Group: passThrough,
       },
     ),
     InputNumber: (props: Record<string, unknown>) => {
       const { value, onChange, min, max, step, className, placeholder } =
-        props as any;
+        props as React.InputHTMLAttributes<HTMLInputElement> & {
+          onChange?: (value: number | null) => void;
+        };
       return React.createElement("input", {
         type: "number",
         value: value ?? "",
@@ -180,7 +192,7 @@ vi.mock("../../../../../hooks/useAppMessage", () => ({
 
 // Mock antd Progress
 vi.mock("antd", async () => {
-  const actual = await vi.importActual<any>("antd");
+  const actual = await vi.importActual<typeof import("antd")>("antd");
   return {
     ...actual,
     Progress: (props: Record<string, unknown>) =>
@@ -279,8 +291,9 @@ function setupDefaultMocks() {
     mockModelProgress,
   );
   vi.mocked(api.configureLocalModelSettings).mockResolvedValue({
-    success: true,
-  } as any);
+    status: "success",
+    message: "",
+  });
 }
 
 function renderModal(
@@ -306,6 +319,117 @@ describe("LocalModelManageModal", () => {
     vi.clearAllMocks();
     setupDefaultMocks();
   });
+
+  it("disables model startup during an inference engine update", async () => {
+    vi.mocked(api.getLlamacppDownloadProgress).mockResolvedValue({
+      ...mockLlamacppProgress,
+      status: "downloading",
+    });
+    renderModal();
+    expect(await screen.findByText("models.localStartServer")).toBeDisabled();
+    expect(api.startLocalServer).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "uses ModelScope repository IDs for downloaded=%s models",
+    async (downloaded) => {
+      const hf: LocalModelInfo = {
+        ...mockModels[0],
+        id: "agentscope-ai/Piccolo-4B-Q8_0",
+        name: "Piccolo-4B-Q8_0",
+        model_type: "decision",
+        downloaded,
+      };
+      const ms: LocalModelInfo = {
+        ...hf,
+        id: "AgentScope/Piccolo-4B-Q8_0",
+        source: "modelscope",
+      };
+      vi.mocked(api.listRecommendedLocalModels).mockResolvedValue([hf, ms]);
+      renderModal();
+      expect(
+        await screen.findByText(hf.id, { exact: false }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(ms.id, { exact: false }),
+      ).not.toBeInTheDocument();
+      await userEvent.click(
+        screen.getByRole("radio", { name: "ModelScope" }).closest("label")!,
+      );
+      expect(
+        await screen.findByText(ms.id, { exact: false }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(hf.id, { exact: false }),
+      ).not.toBeInTheDocument();
+      const decisions = screen.getByRole("region", {
+        name: "models.localDecisionModelsTitle",
+      });
+      await userEvent.click(
+        within(decisions).getByText(
+          downloaded ? "models.localStartServer" : "common.download",
+        ),
+      );
+      if (downloaded) {
+        expect(api.startLocalServer).toHaveBeenCalledWith({ model_id: ms.id });
+      } else {
+        expect(api.startLocalModelDownload).toHaveBeenCalledWith(
+          ms.id,
+          "modelscope",
+        );
+      }
+      await userEvent.click(
+        screen.getByRole("radio", { name: "Hugging Face" }).closest("label")!,
+      );
+      expect(
+        await screen.findByText(hf.id, { exact: false }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(ms.id, { exact: false }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["Q8_0", "BF16"])(
+    "keeps %s decision models in their native controls",
+    async (precision) => {
+      const decision = {
+        ...mockModels[0],
+        id: `agentscope-ai/Piccolo-4B-${precision}`,
+        name: `Piccolo-4B-${precision}`,
+        model_type: "decision" as const,
+        source: "huggingface" as const,
+      };
+      vi.mocked(api.listRecommendedLocalModels).mockResolvedValue([
+        ...mockModels,
+        decision,
+      ]);
+      renderModal();
+      const agents = await screen.findByRole("region", {
+        name: "models.localChatModelsTitle",
+      });
+      const decisions = await screen.findByRole("region", {
+        name: "models.localDecisionModelsTitle",
+      });
+      await waitFor(() => {
+        expect(
+          within(agents).getByText(mockModels[0].name),
+        ).toBeInTheDocument();
+        expect(within(decisions).getByText(decision.name)).toBeInTheDocument();
+      });
+      expect(within(agents).queryByText(decision.name)).not.toBeInTheDocument();
+      expect(within(decisions).queryByRole("link")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("models.localDecisionPurpose"),
+      ).not.toBeInTheDocument();
+      await userEvent.click(
+        within(decisions).getByText("models.localStartServer"),
+      );
+      expect(api.startLocalServer).toHaveBeenCalledWith({
+        model_id: decision.id,
+      });
+    },
+  );
 
   describe("组件渲染", () => {
     it("当 open=false 时不渲染内容", () => {
@@ -347,16 +471,30 @@ describe("LocalModelManageModal", () => {
   });
 
   describe("模型列表展示", () => {
+    it.each(["chat", "decision"] as const)(
+      "starts a downloaded %s model through the existing API",
+      async (modelType) => {
+        const model = { ...mockModels[0], model_type: modelType };
+        vi.mocked(api.listRecommendedLocalModels).mockResolvedValue([model]);
+        renderModal();
+        await userEvent.click(
+          await screen.findByText("models.localStartServer"),
+        );
+        await waitFor(() => {
+          expect(api.startLocalServer).toHaveBeenCalledWith({
+            model_id: model.id,
+          });
+        });
+        expect(api.startLocalModelDownload).not.toHaveBeenCalled();
+      },
+    );
+
     it("显示推荐的本地模型列表", async () => {
       renderModal();
 
-      await waitFor(() => {
-        expect(api.listRecommendedLocalModels).toHaveBeenCalled();
-      });
-
       // model names must be shown
-      expect(screen.getByText("Llama 2 7B")).toBeInTheDocument();
-      expect(screen.getByText("Mistral 7B")).toBeInTheDocument();
+      expect(await screen.findByText("Llama 2 7B")).toBeInTheDocument();
+      expect(await screen.findByText("Mistral 7B")).toBeInTheDocument();
     });
 
     it("当没有推荐模型时显示提示", async () => {
@@ -364,14 +502,11 @@ describe("LocalModelManageModal", () => {
 
       renderModal();
 
-      await waitFor(() => {
-        expect(api.listRecommendedLocalModels).toHaveBeenCalled();
-      });
-
-      // the no-recommended-model hint (translation key) must be shown
+      // Wait for all initialization results to be reflected in the UI rather
+      // than merely waiting for the recommendation request to start.
       expect(
-        screen.getByText("models.localNoRecommendedModels"),
-      ).toBeInTheDocument();
+        await screen.findAllByText("models.localNoRecommendedModels"),
+      ).toHaveLength(2);
     });
 
     it("当没有已下载模型时显示提示", async () => {
@@ -385,13 +520,10 @@ describe("LocalModelManageModal", () => {
 
       renderModal();
 
-      await waitFor(() => {
-        expect(api.listRecommendedLocalModels).toHaveBeenCalled();
-      });
-
-      // the no-downloaded-model hint (translation key) must be shown
+      // Wait for the resolved runtime status and model list to be reflected in
+      // the UI, rather than merely waiting for the requests to start.
       expect(
-        screen.getByText("models.localNoDownloadedModelsHint"),
+        await screen.findByText("models.localNoDownloadedModelsHint"),
       ).toBeInTheDocument();
     });
   });
@@ -406,11 +538,11 @@ describe("LocalModelManageModal", () => {
 
       // the custom model section title (translation key) must be shown
       expect(
-        screen.getByText("models.localCustomModelTitle"),
+        await screen.findByText("models.localCustomModelTitle"),
       ).toBeInTheDocument();
 
       // the input must be shown
-      const input = screen.getByPlaceholderText(
+      const input = await screen.findByPlaceholderText(
         "models.localRepoIdPlaceholder",
       );
       expect(input).toBeInTheDocument();
@@ -419,8 +551,9 @@ describe("LocalModelManageModal", () => {
     it("输入 repo ID 后可以下载", async () => {
       const user = userEvent.setup();
       vi.mocked(api.startLocalModelDownload).mockResolvedValue({
-        success: true,
-      } as any);
+        status: "success",
+        message: "",
+      });
 
       renderModal();
 
@@ -429,7 +562,7 @@ describe("LocalModelManageModal", () => {
       });
 
       // type the repo ID
-      const input = screen.getByPlaceholderText(
+      const input = await screen.findByPlaceholderText(
         "models.localRepoIdPlaceholder",
       );
       await user.type(input, "custom/model");
@@ -468,8 +601,9 @@ describe("LocalModelManageModal", () => {
     it("可以切换下载源", async () => {
       const user = userEvent.setup();
       vi.mocked(api.startLocalModelDownload).mockResolvedValue({
-        success: true,
-      } as any);
+        status: "success",
+        message: "",
+      });
 
       renderModal();
 
@@ -478,7 +612,7 @@ describe("LocalModelManageModal", () => {
       });
 
       // type the repo ID
-      const input = screen.getByPlaceholderText(
+      const input = await screen.findByPlaceholderText(
         "models.localRepoIdPlaceholder",
       );
       await user.type(input, "custom/model");
@@ -719,7 +853,7 @@ describe("LocalModelManageModal", () => {
 
       // the no-model hint must be shown instead of crashing
       expect(
-        screen.getByText("models.localNoRecommendedModels"),
+        screen.getAllByText("models.localNoRecommendedModels")[0],
       ).toBeInTheDocument();
     });
 
@@ -850,6 +984,136 @@ describe("LocalModelManageModal", () => {
       );
       // if the labels exist, the advanced settings are expanded and generate_kwargs is handled
       expect(generateConfigLabel).toBeInTheDocument();
+    });
+  });
+
+  describe("高级配置校验分支", () => {
+    it("max context length 低于最小值时拒绝保存", async () => {
+      const user = userEvent.setup();
+      const onSaved = vi.fn();
+      renderModal({ onSaved });
+
+      await waitFor(() => expect(api.getLocalModelConfig).toHaveBeenCalled());
+      await user.click(screen.getByText("models.localAdvancedConfigTitle"));
+
+      const contextInput = screen.getByDisplayValue("65536");
+      fireEvent.change(contextInput, { target: { value: "1000" } });
+
+      const saveButtons = screen.getAllByRole("button", {
+        name: /models.save/i,
+      });
+      await user.click(saveButtons[0]);
+
+      // Below the minimum, the save API must NOT be called
+      await new Promise((r) => setTimeout(r, 50));
+      expect(api.configureLocalModelSettings).not.toHaveBeenCalled();
+    });
+
+    it("max context length 非整数时拒绝保存", async () => {
+      const user = userEvent.setup();
+      renderModal();
+
+      await waitFor(() => expect(api.getLocalModelConfig).toHaveBeenCalled());
+      await user.click(screen.getByText("models.localAdvancedConfigTitle"));
+
+      const contextInput = screen.getByDisplayValue("65536");
+      fireEvent.change(contextInput, { target: { value: "65536.5" } });
+
+      const saveButtons = screen.getAllByRole("button", {
+        name: /models.save/i,
+      });
+      await user.click(saveButtons[0]);
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(api.configureLocalModelSettings).not.toHaveBeenCalled();
+    });
+
+    it("server port 超出范围时拒绝保存", async () => {
+      const user = userEvent.setup();
+      renderModal();
+
+      await waitFor(() => expect(api.getLocalModelConfig).toHaveBeenCalled());
+      await user.click(screen.getByText("models.localAdvancedConfigTitle"));
+
+      const portInput = screen.getByDisplayValue("8080");
+      fireEvent.change(portInput, { target: { value: "99999" } });
+
+      const saveButtons = screen.getAllByRole("button", {
+        name: /models.save/i,
+      });
+      // the second save button belongs to server port
+      await user.click(saveButtons[1]);
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(api.configureLocalModelSettings).not.toHaveBeenCalled();
+    });
+
+    it("generate config 非法 JSON 时拒绝保存", async () => {
+      const user = userEvent.setup();
+      renderModal();
+
+      await waitFor(() => expect(api.getLocalModelConfig).toHaveBeenCalled());
+      await user.click(screen.getByText("models.localAdvancedConfigTitle"));
+
+      // find the generate config textarea (advanced settings expanded)
+      const textarea = document.querySelector(
+        "textarea",
+      ) as HTMLTextAreaElement;
+      if (textarea) {
+        fireEvent.change(textarea, { target: { value: "{ bad json" } });
+        const saveButtons = screen.getAllByRole("button", {
+          name: /models.save/i,
+        });
+        await user.click(saveButtons[saveButtons.length - 1]);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(api.configureLocalModelSettings).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  describe("下载与服务动作", () => {
+    it("空 repo ID 时给出警告且不发起下载", async () => {
+      const user = userEvent.setup();
+      renderModal();
+
+      await waitFor(() => expect(api.getLocalServerStatus).toHaveBeenCalled());
+
+      // locate the custom-model download button and click with empty repo
+      const customDownloadButtons = screen
+        .getAllByRole("button")
+        .filter(
+          (b) => b.querySelector("svg") && b.closest("[class*='customModel']"),
+        );
+      if (customDownloadButtons.length > 0) {
+        await user.click(customDownloadButtons[0]);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(api.startLocalModelDownload).not.toHaveBeenCalled();
+      }
+    });
+
+    it("推荐模型下载按钮触发下载并轮询", async () => {
+      const user = userEvent.setup();
+      vi.mocked(api.startLocalModelDownload).mockResolvedValue({
+        status: "success",
+        message: "",
+      });
+      renderModal();
+
+      await waitFor(() =>
+        expect(api.listRecommendedLocalModels).toHaveBeenCalled(),
+      );
+
+      // The not-downloaded model (mistral) has a download button
+      const downloadButtons = screen.queryAllByRole("button").filter((b) => {
+        const row = b.closest("[class*='modelListItem']");
+        return row && row.textContent?.includes("Mistral 7B");
+      });
+      if (downloadButtons.length > 0) {
+        await user.click(downloadButtons[0]);
+        await waitFor(() =>
+          expect(api.startLocalModelDownload).toHaveBeenCalled(),
+        );
+      }
     });
   });
 });

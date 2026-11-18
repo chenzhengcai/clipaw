@@ -12,11 +12,9 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
-import stat as stat_module
-import zipfile
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from fastapi import (
     APIRouter,
@@ -28,32 +26,56 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import StreamingResponse
+from pydantic import Field
 from pydantic import ValidationError as PydanticValidationError
 from starlette.routing import Match
 from starlette.types import Scope
 from starlette.datastructures import UploadFile
 
 from domain.errors import (
+    CasConflictError,
     ConflictError,
     NotFoundError,
     StorageIntegrityError,
     ValidationError,
     BadRequestError,
 )
+from models.config import (
+    EXECUTION_AUTHORIZATION_REQUIRED,
+    get_execution_authorization_mode,
+)
+from schemas.common import StrictModel
 from schemas.projects import (
     ExecutionPreauthorizationPolicy,
     ProjectCreateRequest,
     ProjectCreateResponse,
+    ProductionStageRequest,
+    SubtitleAnimationPolicy,
+    SubtitleStylePolicy,
 )
 from services.file_agent_runtime import (
     interrupt_creator_agent_runtime,
     notify_creator_agent_runtime,
 )
+from services.project_files import archive as project_archive
+from services.project_files.archive import (
+    extract_archive as _extract_archive_sanitized,
+)
+from services.project_files.edit_impact import apply_frontend_edit_impacts
 from services.project_files.facade import CreatorFileServices
+from services.project_files.json_pointer import (
+    JsonCasConflict,
+    escape_pointer_token,
+)
+from services.project_files.assets import AssetFileStore
 from services.project_files.models import (
     ExecutionPreauthorization,
+    OverlayCreation,
     Project,
     ProjectSettings,
+    SubtitleAnimation,
+    SubtitleStyle,
+    is_subtitle_overlay,
 )
 from services.project_files.store import (
     InvalidProjectId,
@@ -78,6 +100,7 @@ from .dependencies import (
     CreatorErrorRoute,
     project_file_services,
     resolve_idempotency_key,
+    semantic_etag,
 )
 
 logger = setup_logger("project_routes")
@@ -89,14 +112,6 @@ _COPY_SCOPE = "POST /projects/{project_id}/copy"
 def _log_safe(value: Any) -> str:
     """Neutralize CR/LF in user-provided values before logging."""
     return str(value).replace("\r", "\\r").replace("\n", "\\n")
-
-
-# Hard limits for project archive imports. The zip cap bounds what a
-# request may write to disk; the extraction caps stop zip bombs before
-# a single member is inflated.
-_IMPORT_MAX_ZIP_BYTES = 2 * 1024 * 1024 * 1024
-_IMPORT_MAX_EXTRACTED_BYTES = 4 * 1024 * 1024 * 1024
-_IMPORT_MAX_MEMBERS = 20000
 
 
 class _RemovedProjectPutRoute(CreatorErrorRoute):
@@ -113,6 +128,11 @@ router = APIRouter(
     prefix="/projects",
     tags=["projects"],
     route_class=_RemovedProjectPutRoute,
+)
+storage_router = APIRouter(
+    prefix="/projects",
+    tags=["projects"],
+    route_class=CreatorErrorRoute,
 )
 
 
@@ -147,6 +167,8 @@ def _copy_request_hash(source_project_id: str) -> str:
 
 
 def _settings(request: ProjectCreateRequest) -> ProjectSettings:
+    from services.media_files.motion_blueprints import SUBTITLE_TEMPLATE_PACKS
+
     preauthorization = (
         ExecutionPreauthorization.model_validate(
             request.execution_preauthorization.model_dump(mode="python"),
@@ -154,10 +176,39 @@ def _settings(request: ProjectCreateRequest) -> ProjectSettings:
         if request.execution_preauthorization is not None
         else None
     )
+    # The launch form follows the persisted permission ladder. Both full
+    # confirmation and cost-only confirmation review the script before any
+    # image/video spending; automatic and YOLO launches can keep going.
+    # Explicit API stages remain available for intentional script-only work.
+    script_first = (
+        request.scenario == "short_drama"
+        and get_execution_authorization_mode()
+        == EXECUTION_AUTHORIZATION_REQUIRED
+    )
+    # Reject an unknown pack on the way in, the same way the style route does.
+    # Persisting one would store a setting that every renderer, prompt and the
+    # UI reads back as "smart recommend" — a fourth state nobody can see.
+    wanted_template = (request.subtitle_template or "").strip()
+    if wanted_template and wanted_template not in SUBTITLE_TEMPLATE_PACKS:
+        raise ValidationError(f"未知的字幕风格包：{wanted_template}")
     return ProjectSettings(
+        production_stage=request.production_stage
+        or ("script" if script_first else "media"),
         aspect_ratio=request.aspect_ratio,
         resolution=request.resolution,
         content_type=request.content_type,
+        subtitle_policy=request.subtitle_policy or "off",
+        subtitle_template=wanted_template or None,
+        subtitle_style=(
+            SubtitleStyle(**request.subtitle_style.model_dump())
+            if request.subtitle_style is not None
+            else None
+        ),
+        subtitle_animation=(
+            SubtitleAnimation(**request.subtitle_animation.model_dump())
+            if request.subtitle_animation is not None
+            else None
+        ),
         execution_preauthorization=preauthorization,
     )
 
@@ -172,6 +223,14 @@ def _header(project: Project) -> dict[str, Any]:
         "aspectRatio": project.settings.aspect_ratio,
         "resolution": project.settings.resolution,
         "contentType": project.settings.content_type,
+        "subtitleTemplate": project.settings.subtitle_template,
+        "subtitleStyle": (
+            SubtitleStylePolicy.model_validate(
+                project.settings.subtitle_style.model_dump(mode="python"),
+            ).model_dump(by_alias=True, mode="json")
+            if project.settings.subtitle_style is not None
+            else None
+        ),
         **(
             {
                 "executionPreauthorization": (
@@ -278,7 +337,7 @@ def _existing_copy_receipt(
     return {"projectId": target_project_id}
 
 
-@router.get("")
+@storage_router.get("")
 async def list_projects(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -372,6 +431,56 @@ async def create_project(
         scenario=request.scenario,
         settings=_settings(request),
     )
+    if request.template_id:
+        from services.media_files.video_templates import (
+            apply_video_template_to_project,
+            get_video_template,
+        )
+
+        template = get_video_template(request.template_id)
+        if template is None:
+            from services.media_files.user_templates import (
+                load_user_template,
+            )
+            from services.media_files.video_templates import (
+                VideoTemplate,
+                VideoTemplateDesignFloor,
+            )
+
+            user_tpl = load_user_template(request.template_id)
+            if user_tpl is None:
+                raise ValidationError(
+                    f"未知的视频模板: {request.template_id}",
+                )
+            template = VideoTemplate(
+                template_id=user_tpl.template_id,
+                name=user_tpl.name,
+                description=user_tpl.description,
+                content_type=user_tpl.content_type,
+                scenario=user_tpl.scenario,
+                opening_caption_blueprint=(user_tpl.opening_caption_blueprint),
+                closing_caption_blueprint=(user_tpl.closing_caption_blueprint),
+                default_transition_kind=(user_tpl.default_transition_kind),
+                transition_blend_seconds=(user_tpl.transition_blend_seconds),
+                caption_blueprint_order=tuple(
+                    user_tpl.caption_blueprint_order,
+                ),
+                color_grade=user_tpl.color_grade,
+                energy=user_tpl.energy,
+                density=user_tpl.density,
+                decoration=user_tpl.decoration,
+                design_floor=VideoTemplateDesignFloor(
+                    opening=user_tpl.design_floor_opening,
+                    transitions=user_tpl.design_floor_transitions,
+                    body=user_tpl.design_floor_body,
+                    ending=user_tpl.design_floor_ending,
+                ),
+                decoration_catalog=(),
+                frame_blueprint="",
+                preview_description=user_tpl.preview_description,
+                icon_emoji=user_tpl.icon_emoji,
+            )
+        project = apply_video_template_to_project(project, template)
     initial_response = ProjectCreateResponse(
         projectId=project_id,
         creatorSessionId=session_id,
@@ -381,69 +490,70 @@ async def create_project(
     )
 
     def operation() -> ProjectCreateResponse:
-        # The name-uniqueness check and the create must share one
-        # cross-process lock; per-project lifecycle locks have different
-        # domains for different project ids.
+        # The global name lock only covers the uniqueness check.  The create
+        # itself stages privately and publishes via an atomic rename that
+        # refuses an existing Project id, so holding a global boundary across
+        # the Runtime bootstrap would only serialize unrelated creations.
+        target_name = request.name.strip()
         with CrossProcessFileLock(
             services.projects.root / ".project-names.lock",
         ):
             existing = services.projects.list()
-            target_name = request.name.strip()
             if any(item.name == target_name for item in existing):
                 raise ValidationError(
                     f"项目名称「{target_name}」已存在，请使用其他名称",
                 )
 
-            holder: list[ProjectRuntimeBootstrap] = []
+        holder: list[ProjectRuntimeBootstrap] = []
 
-            def initialize(staged_project_root) -> None:
-                holder.append(
-                    services.sessions.initialize_staged_project(
-                        staged_project_root,
-                        project_id,
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                        session_metadata={
-                            "projectCreate": {
-                                "clientRequestId": client_request_id,
-                                "requestHash": request_hash,
-                                "projectSnapshotId": project_snapshot_id,
-                                "response": initial_response.model_dump(
-                                    mode="json",
-                                    by_alias=True,
-                                ),
-                            },
+        def initialize(staged_project_root) -> None:
+            holder.append(
+                services.sessions.initialize_staged_project(
+                    staged_project_root,
+                    project_id,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    session_metadata={
+                        "projectCreate": {
+                            "clientRequestId": client_request_id,
+                            "requestHash": request_hash,
+                            "projectSnapshotId": project_snapshot_id,
+                            "response": initial_response.model_dump(
+                                mode="json",
+                                by_alias=True,
+                            ),
                         },
-                        initial_goal=request.initial_goal,
-                        goal_id=goal_id
-                        if request.initial_goal is not None
-                        else None,
-                        initial_message_id=(
-                            message_id
-                            if request.initial_goal is not None
-                            else None
-                        ),
-                        initial_client_message_id=(
-                            f"initial-goal:{client_request_id}"
-                            if request.initial_goal is not None
-                            else None
-                        ),
+                    },
+                    initial_goal=request.initial_goal,
+                    goal_id=(
+                        goal_id if request.initial_goal is not None else None
                     ),
-                )
+                    initial_message_id=(
+                        message_id
+                        if request.initial_goal is not None
+                        else None
+                    ),
+                    initial_client_message_id=(
+                        f"initial-goal:{client_request_id}"
+                        if request.initial_goal is not None
+                        else None
+                    ),
+                ),
+            )
 
-            try:
-                snapshot = services.projects.create(
-                    project,
-                    initialize_staged_project=initialize,
-                )
-            except ProjectAlreadyExists:
-                return _existing_bootstrap(
-                    services,
-                    project_id=project_id,
-                    expected_session_id=session_id,
-                    expected_conversation_id=conversation_id,
-                    request_hash=request_hash,
-                )
+        try:
+            snapshot = services.projects.create(
+                project,
+                initialize_staged_project=initialize,
+            )
+        except ProjectAlreadyExists:
+            return _existing_bootstrap(
+                services,
+                project_id=project_id,
+                expected_session_id=session_id,
+                expected_conversation_id=conversation_id,
+                request_hash=request_hash,
+            )
         if len(holder) != 1:
             raise StorageIntegrityError("Project Runtime 未随 Project 原子创建")
         services.poller.note_commit(snapshot)
@@ -469,9 +579,423 @@ async def create_project(
     return result
 
 
+@router.post("/{project_id}/production-stage")
+async def set_production_stage(
+    project_id: str,
+    request: ProductionStageRequest,
+    services: CreatorFileServices = Depends(project_file_services),
+):
+    expected = semantic_etag(request.project_etag)
+    snapshot = await asyncio.to_thread(services.projects.read, project_id)
+    if snapshot.etag != expected:
+        raise ConflictError("剧本已更新，请查看最新内容后重新确认。")
+    candidate = snapshot.project.model_dump(mode="json")
+    candidate["settings"]["production_stage"] = request.stage
+    result = await services.commit_candidate(
+        base=snapshot,
+        candidate=candidate,
+        origin="frontend_edit",
+        review_policy="auto_fix",
+        production_stage_confirmation=expected,
+    )
+    notify_creator_agent_runtime(project_id)
+    return {"ok": True, "generation": result.snapshot.generation}
+
+
+class SubtitleToggleRequest(StrictModel):
+    enabled: bool
+
+
+@router.patch("/{project_id}/subtitles/toggle")
+async def toggle_subtitles(
+    project_id: str,
+    request: SubtitleToggleRequest,
+    services: CreatorFileServices = Depends(project_file_services),
+):
+    """Batch enable or disable all subtitle overlay elements.
+
+    ``is_subtitle_overlay`` is the single definition of what counts as a
+    subtitle here, so a pet-OS bubble (which the prompts keep free of
+    ``caption_role`` on purpose) is never hidden by the toolbar toggle.
+    """
+
+    def operation() -> dict[str, Any]:
+        snapshot = services.projects.read(project_id)
+        base = snapshot.project.model_dump(mode="json")
+        candidate = snapshot.project.model_dump(mode="json")
+        content_type = snapshot.project.settings.content_type
+        updated_count = 0
+        changed: list[str] = []
+        captions: list[str] = []
+        for timeline_id, timeline in snapshot.project.timelines.items.items():
+            # Rolled-back copies are frozen; the work graph never reads them.
+            if str(timeline_id).startswith("snapshot:"):
+                continue
+            for element_id, element in timeline.elements_by_id.items():
+                creation = element.creation
+                if not isinstance(creation, OverlayCreation):
+                    continue
+                if not is_subtitle_overlay(
+                    text=creation.text,
+                    vibe=creation.vibe,
+                    caption_role=creation.caption_role,
+                    content_type=content_type,
+                ):
+                    continue
+                pointer = (
+                    "/timelines/items/"
+                    f"{escape_pointer_token(str(timeline_id))}"
+                    "/elements_by_id/"
+                    f"{escape_pointer_token(str(element_id))}/enabled"
+                )
+                captions.append(pointer)
+                if bool(element.enabled) == request.enabled:
+                    continue
+                candidate["timelines"]["items"][timeline_id]["elements_by_id"][
+                    element_id
+                ]["enabled"] = request.enabled
+                updated_count += 1
+                changed.append(pointer)
+        # The final cut bakes captions in, so a toggle has to flag the render
+        # stale; committing on its own keeps the previously composed video.
+        # Repeating a toggle that changes nothing still refreshes the cut,
+        # which recovers videos composed before their captions were hidden.
+        if changed:
+            candidate, _ = apply_frontend_edit_impacts(
+                candidate,
+                changed,
+                base=base,
+            )
+        elif captions:
+            candidate, _ = apply_frontend_edit_impacts(candidate, captions)
+        return {
+            "candidate": candidate,
+            "snapshot": snapshot,
+            "count": updated_count,
+        }
+
+    try:
+        data = await asyncio.to_thread(operation)
+    except ProjectNotFound as exc:
+        raise NotFoundError(str(exc)) from exc
+    except InvalidProjectId as exc:
+        raise BadRequestError(str(exc)) from exc
+    except (ProjectIntegrityError, ProjectStoreError) as exc:
+        raise StorageIntegrityError(str(exc)) from exc
+
+    result = await services.commit_candidate(
+        base=data["snapshot"],
+        candidate=data["candidate"],
+        origin="frontend_edit",
+        review_policy="auto_fix",
+    )
+    notify_creator_agent_runtime(project_id)
+    return {
+        "ok": True,
+        "generation": result.snapshot.generation,
+        "toggled": data["count"],
+        "enabled": request.enabled,
+    }
+
+
+class SubtitleStyleRequest(StrictModel):
+    """One request that changes how subtitles look and keeps copy honest.
+
+    A key that is present wins, so the same call can switch, adjust or go
+    back: ``subtitleTemplate`` ``null``/``""`` mean smart recommend and
+    ``subtitleStyle`` ``null`` (or an all-default object) clears the colour /
+    size / outline overrides.  ``animation`` overrides the pack's signature
+    motion for the addressed captions, field by field.
+    """
+
+    subtitle_template: str | None = Field(None, alias="subtitleTemplate")
+    subtitle_style: SubtitleStylePolicy | None = Field(
+        None,
+        alias="subtitleStyle",
+    )
+    animation: SubtitleAnimationPolicy | None = None
+    element_ids: list[str] | None = Field(
+        None,
+        alias="elementIds",
+        max_length=500,
+    )
+    sync_prompts: bool = Field(True, alias="syncPrompts")
+
+
+@router.patch("/{project_id}/subtitles/style")
+async def set_subtitle_style(
+    project_id: str,
+    request: SubtitleStyleRequest,
+    services: CreatorFileServices = Depends(project_file_services),
+):
+    """Switch the subtitle style pack and keep every layer of it in step.
+
+    Picking a pack used to change only what the creation form remembered:
+    the burned-in captions, the live preview and each subtitle's 动效描述
+    kept describing the old look until a model happened to redesign them.
+    This route writes the setting, redraws the deterministic caption
+    documents it owns and fills the canonical style sentence into empty
+    descriptions — never overwriting wording a user or an agent wrote.
+    """
+
+    from services.media_files.informal_launch_template import (
+        uses_informal_launch_captions,
+    )
+    from services.media_files.motion_blueprints import (
+        SUBTITLE_TEMPLATE_PACKS,
+        subtitle_pack_prompt_line,
+        sync_subtitle_prompt,
+    )
+    from services.media_files.motion_design import (
+        build_caption_document,
+        caption_animation_override,
+        caption_owned_template,
+        design_canvas_size,
+        externalize_motion_document,
+        normalise_caption_animation,
+        pack_caption_animation,
+        resolve_caption_animation,
+        resolve_caption_location,
+    )
+    from services.project_files.models import (
+        IndexedFile,
+        MotionGraphic,
+    )
+
+    def operation() -> dict[str, Any]:
+        snapshot = services.projects.read(project_id)
+        project = snapshot.project
+        settings = project.settings
+        pack_id = settings.subtitle_template
+        # A style pack is a project-wide promise (see the section's own note):
+        # scoping it to some captions would leave the rest describing — and
+        # drawing — the previous look, which is the drift this route removes.
+        if request.element_ids and (
+            "subtitle_template" in request.model_fields_set
+            or "subtitle_style" in request.model_fields_set
+        ):
+            raise ValidationError(
+                "elementIds 只能配合入场/出场/循环选择；" "风格包与覆盖样式始终作用于全项目字幕。",
+            )
+        # A present key is authoritative, so the UI can also go back:
+        # ``null``/``""`` mean smart recommend and an explicit ``null`` style
+        # clears every colour / size / outline override.
+        if "subtitle_template" in request.model_fields_set:
+            wanted = (request.subtitle_template or "").strip()
+            if wanted and wanted not in SUBTITLE_TEMPLATE_PACKS:
+                raise ValidationError(f"未知的字幕风格包：{wanted}")
+            pack_id = wanted or None
+        style_model = settings.subtitle_style
+        if "subtitle_style" in request.model_fields_set:
+            style_model = (
+                SubtitleStyle(**request.subtitle_style.model_dump())
+                if request.subtitle_style is not None
+                else None
+            )
+            if style_model is not None and not (
+                style_model.color
+                or style_model.font_scale is not None
+                or style_model.stroke_scale is not None
+                or style_model.background_opacity is not None
+                or style_model.font_family is not None
+            ):
+                # "No overrides" is stored as no style object at all, so an
+                # untouched project keeps serialising exactly as it did.
+                style_model = None
+        style_json = (
+            style_model.model_dump(mode="json")
+            if style_model is not None
+            else None
+        )
+        candidate = project.model_dump(mode="json")
+        candidate["settings"]["subtitle_template"] = pack_id
+        candidate["settings"]["subtitle_style"] = style_json
+        # Redrawn documents are published as content-addressed Project files
+        # before the commit references them, exactly as the design pass does,
+        # so switching a pack here cannot leave a second copy of the truth.
+        file_store = AssetFileStore(services.projects.project_root(project_id))
+        indexed_files: dict[str, IndexedFile] = {}
+
+        def externalize(document: MotionGraphic) -> dict[str, Any]:
+            stored, indexed = externalize_motion_document(document, file_store)
+            indexed_files[indexed.file_id] = indexed
+            return stored.model_dump(mode="json")
+
+        timelines = candidate["timelines"]["items"]
+        # The caption boxes are validated against the same canvas the design
+        # pass and the renderer use, so a switch here cannot bake a document
+        # the next pass would refuse to repair.
+        canvas_size = design_canvas_size(project)
+        pointers = ["/settings/subtitle_template", "/settings/subtitle_style"]
+        selected = set(request.element_ids or ())
+        requested_animation = (
+            request.animation.model_dump(exclude_none=True)
+            if request.animation is not None
+            else None
+        )
+        synced = 0
+        redrawn = 0
+        skipped = 0
+        for timeline_id, timeline in project.timelines.items.items():
+            # Rolled-back copies are frozen, and a 发布会 timeline owns its
+            # lettering through the official template: neither is redrawn.
+            if str(timeline_id).startswith("snapshot:"):
+                continue
+            if uses_informal_launch_captions(timeline):
+                continue
+            items = timelines[str(timeline_id)]["elements_by_id"]
+            for element_id, element in timeline.elements_by_id.items():
+                creation = element.creation
+                if not isinstance(creation, OverlayCreation):
+                    continue
+                if not is_subtitle_overlay(
+                    text=creation.text,
+                    vibe=creation.vibe,
+                    caption_role=creation.caption_role,
+                    content_type=settings.content_type,
+                ):
+                    continue
+                if selected and element_id not in selected:
+                    continue
+                raw = items.get(str(element_id))
+                if not isinstance(raw, dict):
+                    continue
+                # The element root is what invalidates the composed master;
+                # a ``/creation/prompt`` pointer would also throw away a
+                # hand-designed document, which a style switch must not do.
+                pointers.append(
+                    "/timelines/items/"
+                    f"{escape_pointer_token(str(timeline_id))}"
+                    "/elements_by_id/"
+                    f"{escape_pointer_token(str(element_id))}",
+                )
+                motion = creation.motion
+                # Only these two kinds of caption can honour a pack in pixels:
+                # the documents this pipeline drew (redrawn below) and a
+                # caption with no document at all (the compose-time fallback
+                # burns the pack typography into it).  A free-form design, a
+                # blueprint 花字 or an authored card owns its own look, so its
+                # description must keep describing that — writing the pack
+                # sentence into it would invent the very mismatch users report.
+                owned = caption_owned_template(motion)
+                if not owned and motion is not None:
+                    if requested_animation:
+                        skipped += 1
+                    continue
+                override = caption_animation_override(settings)
+                animation = normalise_caption_animation(
+                    resolve_caption_animation(motion, pack_id, override)
+                    if owned
+                    else pack_caption_animation(pack_id, override),
+                )
+                if requested_animation:
+                    animation.update(requested_animation)
+                if request.sync_prompts:
+                    prompt, changed = sync_subtitle_prompt(
+                        creation.prompt,
+                        pack_id,
+                        style_json,
+                        animation,
+                    )
+                    if changed and prompt != creation.prompt:
+                        raw["creation"]["prompt"] = prompt
+                        synced += 1
+                if not owned and not requested_animation:
+                    # A caption that never had a document and got no motion
+                    # pick keeps waiting for its design pass; a style switch
+                    # must not quietly preempt a pending free-form design.
+                    continue
+                location = resolve_caption_location(
+                    text=creation.text,
+                    caption_role=creation.caption_role,
+                    content_type=settings.content_type,
+                    vibe=creation.vibe,
+                    location=element.location,
+                    canvas_size=canvas_size,
+                )
+                document, _concept = build_caption_document(
+                    text=creation.text,
+                    location=location,
+                    pack_id=pack_id,
+                    style=style_json,
+                    animation=animation,
+                )
+                payload = externalize(document)
+                if raw["creation"].get("motion") != payload:
+                    raw["creation"]["motion"] = payload
+                    redrawn += 1
+                if raw.get("location") != location.model_dump(mode="json"):
+                    # The document was measured for the box it is being drawn
+                    # into, so the element has to end up with that same box;
+                    # leaving a narrower one behind would clip the copy again.
+                    raw["location"] = location.model_dump(mode="json")
+        files_by_id = candidate["assets"]["files_by_id"]
+        for file_id, indexed in indexed_files.items():
+            if file_id not in files_by_id:
+                files_by_id[file_id] = indexed.model_dump(mode="json")
+        # No ``base`` on purpose: a repeated pick of the same pack still has
+        # to refresh the composed video (see the toolbar toggle for the same
+        # deliberate no-op refresh).
+        candidate, _impact = apply_frontend_edit_impacts(candidate, pointers)
+        return {
+            "candidate": candidate,
+            "snapshot": snapshot,
+            "pack": pack_id,
+            "style": style_json,
+            # The exact sentence the renderer was built from, so the UI can
+            # echo the truth instead of keeping a second copy of the wording.
+            "style_line": subtitle_pack_prompt_line(pack_id, style_json),
+            "synced": synced,
+            "redrawn": redrawn,
+            "skipped": skipped,
+        }
+
+    try:
+        data = await asyncio.to_thread(operation)
+    except ProjectNotFound as exc:
+        raise NotFoundError(str(exc)) from exc
+    except InvalidProjectId as exc:
+        raise BadRequestError(str(exc)) from exc
+    except (ProjectIntegrityError, ProjectStoreError) as exc:
+        raise StorageIntegrityError(str(exc)) from exc
+
+    try:
+        result = await services.commit_candidate(
+            base=data["snapshot"],
+            candidate=data["candidate"],
+            origin="frontend_edit",
+            review_policy="auto_fix",
+        )
+    except JsonCasConflict as exc:
+        # The agent may be editing the same caption; a stale-field collision is
+        # a retryable conflict, never a 500 (same mapping /patch already gives).
+        raise CasConflictError(
+            "Project 字段已被其他写者修改",
+            details={"conflicts": exc.conflicts},
+        ) from exc
+    notify_creator_agent_runtime(project_id)
+    return {
+        "ok": True,
+        "generation": result.snapshot.generation,
+        "subtitleTemplate": data["pack"],
+        "subtitleStyle": data["style"],
+        "styleLine": data["style_line"],
+        "syncedPrompts": data["synced"],
+        "redrawnDocuments": data["redrawn"],
+        # Captions whose look belongs to an independent design: the caller has
+        # to be able to say so instead of reporting a silent success.
+        "skippedNonTemplate": data["skipped"],
+    }
+
+
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: str,
+    cascade: bool = Query(
+        True,
+        description="When false, only the project manifest is removed; "
+        "assets and runtime data are preserved on disk.",
+    ),
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     services: CreatorFileServices = Depends(project_file_services),
 ) -> Response:
@@ -490,15 +1014,26 @@ async def delete_project(
     from api.file_session_routes import _cancel_detached_project_tasks
 
     _cancel_detached_project_tasks(services, project_id)
+    # Release the poller and the per-project log before the directory
+    # rename. On Windows an open creator.log inside the tree makes
+    # os.replace fail with WinError 5.
+    services.poller.close(project_id)
+    from utils.logger import close_creator_project_logging
+
+    close_creator_project_logging(project_id)
     try:
-        await asyncio.to_thread(services.projects.delete, project_id)
+        await asyncio.to_thread(
+            services.projects.delete,
+            project_id,
+            cascade=cascade,
+        )
     except ProjectNotFound:
         pass
     except (ProjectIntegrityError, ProjectStoreError) as exc:
         raise StorageIntegrityError(str(exc)) from exc
-    services.poller.close(project_id)
-    from utils.logger import close_creator_project_logging
-
+    # Cancellation only signals workers; a late project-scoped emit can
+    # reopen the log between the pre-delete close and rename. Drop that
+    # handler again so deleted projects do not keep an open target.
     close_creator_project_logging(project_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -571,6 +1106,12 @@ async def copy_project(
     new_conversation_id = _stable_id("conversation", copy_identity)
 
     def operation() -> dict[str, Any]:
+        # The global name lock only covers the replay-receipt check and the
+        # copy-name computation.  The asset tree copy and Runtime bootstrap
+        # run in a private staging directory outside the lock (export learned
+        # this the hard way: holding a global boundary across large-tree I/O
+        # caused routine 10-second lock timeouts) and are published by the
+        # create's atomic rename, which refuses an already-existing Project.
         with CrossProcessFileLock(
             services.projects.root / ".project-names.lock",
         ):
@@ -585,86 +1126,87 @@ async def copy_project(
                 )
             except ProjectNotFound:
                 pass
+            source_name = services.projects.read(project_id).project.name
+            copy_name = f"{source_name} copy"
+            existing = services.projects.list()
+            base_name = copy_name
+            suffix = 1
+            while any(item.name == copy_name for item in existing):
+                suffix += 1
+                copy_name = f"{base_name} {suffix}"
 
-            # Freeze the source Project and its asset tree at one revision for
-            # the whole copy. Project commits/deletion take the exclusive side.
-            with services.projects.lifecycle_lock(project_id, shared=True):
-                source_snapshot = services.projects.read(project_id)
-                source = source_snapshot.project
-                source_root = services.projects.project_root(project_id)
-                copy_name = f"{source.name} copy"
-                existing = services.projects.list()
-                base_name = copy_name
-                suffix = 1
-                while any(item.name == copy_name for item in existing):
-                    suffix += 1
-                    copy_name = f"{base_name} {suffix}"
+        # Freeze the source Project and its asset tree at one revision for
+        # the whole copy. Project commits/deletion take the exclusive side.
+        with services.projects.lifecycle_lock(project_id, shared=True):
+            source_snapshot = services.projects.read(project_id)
+            source = source_snapshot.project
+            source_root = services.projects.project_root(project_id)
 
-                new_project = Project.new(
-                    project_id=new_project_id,
-                    name=copy_name,
-                    description=source.description,
-                    scenario=source.scenario,
-                    settings=source.settings,
-                )
-                new_project = new_project.model_copy(
-                    update={
-                        "strategy": source.strategy,
-                        "visual": source.visual,
-                        "timelines": source.timelines,
-                        "assets": source.assets,
-                    },
-                )
-                initial_response = {"projectId": new_project_id}
-                holder: list[ProjectRuntimeBootstrap] = []
+            new_project = Project.new(
+                project_id=new_project_id,
+                name=copy_name,
+                description=source.description,
+                scenario=source.scenario,
+                settings=source.settings,
+            )
+            new_project = new_project.model_copy(
+                update={
+                    "strategy": source.strategy,
+                    "visual": source.visual,
+                    "timelines": source.timelines,
+                    "assets": source.assets,
+                },
+            )
+            initial_response = {"projectId": new_project_id}
+            holder: list[ProjectRuntimeBootstrap] = []
 
-                def initialize(staged_root: Path) -> None:
-                    assets_src = source_root / "assets"
-                    assets_dst = staged_root / "assets"
-                    if assets_src.is_dir():
-                        for item in assets_src.iterdir():
-                            dst = assets_dst / item.name
-                            if item.is_dir():
-                                shutil.copytree(
-                                    str(item),
-                                    str(dst),
-                                    dirs_exist_ok=True,
-                                )
-                            else:
-                                shutil.copy2(str(item), str(dst))
-                    holder.append(
-                        services.sessions.initialize_staged_project(
-                            staged_root,
-                            new_project_id,
-                            session_id=new_session_id,
-                            conversation_id=new_conversation_id,
-                            session_metadata={
-                                "projectCopy": {
-                                    "clientRequestId": client_request_id,
-                                    "requestHash": request_hash,
-                                    "sourceProjectId": project_id,
-                                    "sourceGeneration": source_snapshot.generation,
-                                    "sourceEtag": source_snapshot.etag,
-                                    "response": initial_response,
-                                },
+            def initialize(staged_root: Path) -> None:
+                assets_src = source_root / "assets"
+                assets_dst = staged_root / "assets"
+                if assets_src.is_dir():
+                    for item in assets_src.iterdir():
+                        dst = assets_dst / item.name
+                        if item.is_dir():
+                            shutil.copytree(
+                                str(item),
+                                str(dst),
+                                dirs_exist_ok=True,
+                            )
+                        else:
+                            shutil.copy2(str(item), str(dst))
+                holder.append(
+                    services.sessions.initialize_staged_project(
+                        staged_root,
+                        new_project_id,
+                        session_id=new_session_id,
+                        conversation_id=new_conversation_id,
+                        session_metadata={
+                            "projectCopy": {
+                                "clientRequestId": client_request_id,
+                                "requestHash": request_hash,
+                                "sourceProjectId": project_id,
+                                "sourceGeneration": source_snapshot.generation,
+                                "sourceEtag": source_snapshot.etag,
+                                "response": initial_response,
                             },
-                        ),
-                    )
+                        },
+                    ),
+                )
 
-                try:
-                    snapshot = services.projects.create(
-                        new_project,
-                        initialize_staged_project=initialize,
-                    )
-                except ProjectAlreadyExists:
-                    return _existing_copy_receipt(
-                        services,
-                        target_project_id=new_project_id,
-                        expected_session_id=new_session_id,
-                        expected_conversation_id=new_conversation_id,
-                        client_request_id=client_request_id,
-                        request_hash=request_hash,
-                    )
+            try:
+                snapshot = services.projects.create(
+                    new_project,
+                    initialize_staged_project=initialize,
+                )
+            except ProjectAlreadyExists:
+                return _existing_copy_receipt(
+                    services,
+                    target_project_id=new_project_id,
+                    expected_session_id=new_session_id,
+                    expected_conversation_id=new_conversation_id,
+                    client_request_id=client_request_id,
+                    request_hash=request_hash,
+                )
 
         if len(holder) != 1:
             raise StorageIntegrityError(
@@ -698,7 +1240,7 @@ async def copy_project(
 # pylint: enable=too-many-statements
 
 
-@router.get("/{project_id}/export")
+@storage_router.get("/{project_id}/export")
 async def export_project(
     project_id: str,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
@@ -732,6 +1274,8 @@ async def export_project(
         raise NotFoundError(str(exc)) from exc
     except InvalidProjectId as exc:
         raise BadRequestError(str(exc)) from exc
+    except BadRequestError:
+        raise
     except Exception as e:
         logger.error(
             f"failed to export project {_log_safe(project_id)}",
@@ -743,39 +1287,7 @@ async def export_project(
 
 
 def _validate_import_archive(saved_zip: Path) -> None:
-    """Preflight the archive with ZipInfo before anything is inflated."""
-
-    try:
-        with zipfile.ZipFile(saved_zip) as archive:
-            members = archive.infolist()
-            if len(members) > _IMPORT_MAX_MEMBERS:
-                raise BadRequestError(
-                    f"archive holds more than {_IMPORT_MAX_MEMBERS} entries",
-                )
-            total = 0
-            for info in members:
-                member = PurePosixPath(info.filename)
-                if member.is_absolute() or ".." in member.parts:
-                    raise BadRequestError(
-                        f"archive entry escapes the extraction root: "
-                        f"{info.filename!r}",
-                    )
-                mode = (info.external_attr >> 16) & 0o170000
-                if mode == stat_module.S_IFLNK:
-                    raise BadRequestError(
-                        f"archive entry is a symlink: {info.filename!r}",
-                    )
-                total += info.file_size
-                if (
-                    info.file_size > _IMPORT_MAX_EXTRACTED_BYTES
-                    or total > _IMPORT_MAX_EXTRACTED_BYTES
-                ):
-                    raise BadRequestError(
-                        "archive expands beyond the "
-                        f"{_IMPORT_MAX_EXTRACTED_BYTES} byte import limit",
-                    )
-    except zipfile.BadZipFile as e:
-        raise BadRequestError(f"not a valid zip archive: {str(e)}") from e
+    project_archive.validate_archive(saved_zip)
 
 
 async def _save_upload_to(upload, saved_zip: Path) -> None:
@@ -789,10 +1301,10 @@ async def _save_upload_to(upload, saved_zip: Path) -> None:
                 if not chunk:
                     break
                 written += len(chunk)
-                if written > _IMPORT_MAX_ZIP_BYTES:
+                if written > project_archive.MAX_ARCHIVE_BYTES:
                     raise BadRequestError(
                         "uploaded archive exceeds the "
-                        f"{_IMPORT_MAX_ZIP_BYTES} byte limit",
+                        f"{project_archive.MAX_ARCHIVE_BYTES} byte limit",
                     )
                 f.write(chunk)
         logger.info(
@@ -848,6 +1360,12 @@ def _resolve_extracted_project(extract_dir: Path) -> tuple[Path, str]:
             f"archive folder {dirs[0].name!r} does not match "
             f"project.json project_id {project_id!r}",
         )
+    report = AssetFileStore(dirs[0]).validate_index(project.assets)
+    if not report.valid:
+        raise BadRequestError(
+            "archive contains missing or corrupt indexed media: "
+            + ", ".join(item.file_id for item in report.failures[:5]),
+        )
     return dirs[0], project_id
 
 
@@ -869,10 +1387,9 @@ async def _run_import(upload) -> str:
         extract_dir.mkdir(mode=0o700)
         try:
             await asyncio.to_thread(
-                shutil.unpack_archive,
-                str(saved_zip),
-                extract_dir=extract_dir,
-                format="zip",
+                _extract_archive_sanitized,
+                saved_zip,
+                extract_dir,
             )
             logger.info(
                 f"unpacked zip file {_log_safe(saved_zip)} to {extract_dir}",
@@ -882,7 +1399,12 @@ async def _run_import(upload) -> str:
                 f"failed to unpack zip file {saved_zip}: {str(e)}",
             ) from e
 
-        project_dir, project_id = _resolve_extracted_project(extract_dir)
+        # Large Project documents must not block the API event loop while
+        # the browser waits for server-side import after upload completes.
+        project_dir, project_id = await asyncio.to_thread(
+            _resolve_extracted_project,
+            extract_dir,
+        )
 
         target_project_dir = Path(data_root, project_dir.name)
         if target_project_dir.exists():
@@ -897,15 +1419,15 @@ async def _run_import(upload) -> str:
         )
         return project_id
     finally:
-        saved_zip.unlink(missing_ok=True)
-        shutil.rmtree(extract_dir, ignore_errors=True)
+        await asyncio.to_thread(saved_zip.unlink, missing_ok=True)
+        await asyncio.to_thread(shutil.rmtree, extract_dir, ignore_errors=True)
         logger.info(
             "deleted temporary importing file and folder "
             f"{_log_safe(saved_zip)}, {extract_dir}",
         )
 
 
-@router.post("/import")
+@storage_router.post("/import")
 async def import_project(
     request: Request,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),

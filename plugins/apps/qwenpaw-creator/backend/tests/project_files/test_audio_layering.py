@@ -2,10 +2,12 @@
 # flake8: noqa: E501
 """Three-layer audio separation: required roles, the narration-voiced
 overlap gate, shot placement, and the v8->v9 role migration."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 from typing import Any
 
 import pytest
@@ -14,7 +16,10 @@ from pydantic import ValidationError
 from services.media_files.local_execution import _timeline_speech_windows
 from services.project_files.migrations import migrate_project_document
 from services.project_files.models import AudioCreation, Project
-
+from services.project_files.serialization import (
+    canonical_json_bytes,
+    load_project_json,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -148,17 +153,19 @@ def _audio_element(
     start_tick: int,
     duration_tick: int,
     role: str | None,
+    enabled: bool = True,
+    version_id: str = "audio-version-1",
 ) -> dict[str, Any]:
     creation: dict[str, Any] = {
         "type": "audio",
-        "source_asset_version_id": "audio-version-1",
+        "source_asset_version_id": version_id,
     }
     if role is not None:
         creation["role"] = role
     return {
         "element_id": element_id,
         "label": "Audio",
-        "enabled": True,
+        "enabled": enabled,
         "span": {"start_tick": start_tick, "duration_tick": duration_tick},
         "z_index": 0,
         "creation": creation,
@@ -205,9 +212,10 @@ def test_v8_migration_stamps_roles_and_the_result_stays_loadable() -> None:
     """The migration must never emit a document its own validator rejects.
 
     Pre-role audio becomes narration (the pre-role mixer ducked footage
-    under every track) unless it overlaps a natively voiced element —
-    stamping narration there would trip the load-time overlap gate and
-    make the project unopenable, so those tracks become sfx instead.
+    under every track) unless it overlaps a natively voiced element or an
+    earlier narration — stamping narration there would trip the load-time
+    overlap gate (s2v driving voice, or two voices at once) and make the
+    project unopenable, so those tracks become sfx instead.
     """
 
     raw = _with_elements(
@@ -217,13 +225,13 @@ def test_v8_migration_stamps_roles_and_the_result_stays_loadable() -> None:
             duration_tick=5_000,
             dialogue="我今天去了一个地方",
         ),
-        _audio_element(  # full-length bed over the dialogue: sfx
+        _audio_element(  # first role-less span, no s2v here: narration
             "audio-overlapping",
             start_tick=0,
             duration_tick=8_000,
             role=None,
         ),
-        _audio_element(  # clear of the voiced span: narration
+        _audio_element(  # overlaps the narration above: sfx
             "audio-clear",
             start_tick=5_000,
             duration_tick=3_000,
@@ -243,15 +251,98 @@ def test_v8_migration_stamps_roles_and_the_result_stays_loadable() -> None:
     elements = migrated["timelines"]["items"]["timeline:main"][
         "elements_by_id"
     ]
-    assert elements["audio-overlapping"]["creation"]["role"] == "sfx"
-    assert elements["audio-clear"]["creation"]["role"] == "narration"
+    assert elements["audio-overlapping"]["creation"]["role"] == "narration"
+    assert elements["audio-clear"]["creation"]["role"] == "sfx"
     assert elements["audio-explicit"]["creation"]["role"] == "bgm"
     assert "role" not in elements["r2v-1"]["creation"]
-    assert migrated["schema_version"] == 9
+    assert migrated["schema_version"] == 10
     Project.model_validate(migrated)  # loadable, or the migration failed
 
 
-def test_narration_overlapping_dialogue_element_is_rejected() -> None:
+def test_pre_merge_v9_document_missing_roles_is_repaired_on_load() -> None:
+    """Two "schema v9" lineages merged: pr-150's original v9 exported
+    documents without ``creation.role`` on audio Elements. They already
+    say schema_version=9, so the v8->v9 migration never runs — loading
+    must apply the same stamping as an idempotent same-version repair
+    instead of failing validation with "role Field required".
+    """
+
+    raw = _with_elements(
+        _r2v_element(
+            "r2v-1",
+            start_tick=0,
+            duration_tick=5_000,
+            dialogue="我今天去了一个地方",
+        ),
+        _audio_element(  # first role-less span: narration
+            "audio-overlapping",
+            start_tick=0,
+            duration_tick=8_000,
+            role=None,
+        ),
+        _audio_element(  # overlaps the narration above: sfx
+            "audio-clear",
+            start_tick=5_000,
+            duration_tick=3_000,
+            role=None,
+        ),
+        _audio_element(  # explicit role is authoritative
+            "audio-explicit",
+            start_tick=0,
+            duration_tick=2_000,
+            role="bgm",
+        ),
+    )
+    raw["schema_version"] = 9  # simulate pre-merge v9 export shape
+    assert raw["schema_version"] == 9  # the exact failing import shape
+
+    # The archive-import path parses JSON and calls load_project_document.
+    project = load_project_json(json.dumps(raw))
+
+    elements = project.timelines.items["timeline:main"].elements_by_id
+    assert elements["audio-overlapping"].creation.role == "narration"
+    assert elements["audio-clear"].creation.role == "sfx"
+    assert elements["audio-explicit"].creation.role == "bgm"
+
+    # Idempotent: a second pass over the repaired document is a no-op.
+    repaired = migrate_project_document(raw)
+    assert migrate_project_document(repaired) == repaired
+
+
+def test_v9_document_with_roles_is_not_altered_by_the_repair() -> None:
+    raw = _with_elements(
+        _r2v_element(
+            "r2v-1",
+            start_tick=0,
+            duration_tick=5_000,
+            dialogue="我今天去了一个地方",
+        ),
+        _audio_element(
+            "audio-bgm",
+            start_tick=0,
+            duration_tick=8_000,
+            role="bgm",
+        ),
+        _audio_element(
+            "audio-narration",
+            start_tick=5_000,
+            duration_tick=3_000,
+            role="narration",
+        ),
+    )
+    raw["schema_version"] = 9  # simulate pre-merge v9 export shape
+    assert raw["schema_version"] == 9
+
+    # v9→v10 migration bumps the version even when no overlays exist,
+    # but nothing else changes for a role-complete audio document.
+    migrated = migrate_project_document(raw)
+    assert migrated["schema_version"] == 10
+    del migrated["schema_version"]
+    del raw["schema_version"]
+    assert migrated == raw
+
+
+def test_legacy_dialogue_rows_do_not_gate_narration() -> None:
     raw = _with_elements(
         _r2v_element(
             "r2v-1",
@@ -266,8 +357,7 @@ def test_narration_overlapping_dialogue_element_is_rejected() -> None:
             role="narration",
         ),
     )
-    with pytest.raises(ValidationError, match="overlaps the voiced"):
-        Project.model_validate(raw)
+    Project.model_validate(raw)
 
 
 def test_gate_accepts_non_conflicting_audio_layouts() -> None:
@@ -355,7 +445,7 @@ def test_narration_may_cover_the_silent_shots_of_an_element() -> None:
     Project.model_validate(raw)
 
 
-def test_narration_over_the_voiced_shot_interval_is_rejected() -> None:
+def test_legacy_shot_timing_does_not_gate_narration() -> None:
     raw = _with_elements(
         _two_shot_r2v_element(),
         _audio_element(
@@ -365,22 +455,18 @@ def test_narration_over_the_voiced_shot_interval_is_rejected() -> None:
             role="narration",
         ),
     )
-    with pytest.raises(ValidationError, match="overlaps the voiced"):
-        Project.model_validate(raw)
+    Project.model_validate(raw)
 
 
-def test_shot_placement_scales_declared_durations_onto_the_span() -> None:
-    """Declared shot durations rarely sum to the span exactly; the
-    provider renders the shot list into the span, so placement must
-    scale. Field probe: a 10s element with two 8s shots and dialogue in
-    the second voices roughly 5-10s, not 8-10s."""
+def test_legacy_durations_do_not_create_speech_windows() -> None:
+    """Retired duration/dialogue rows cannot supply real speech timing."""
 
     drifting = _two_shot_r2v_element(
         duration_tick=10_000,
         shot_seconds=(8.0, 8.0),
         dialogues=("", "后半段才开口"),
     )
-    # Narration over the true speaking interval (5s onward) is rejected …
+    # Neither former interval imposes a narrative-based audio gate.
     raw = _with_elements(
         drifting,
         _audio_element(
@@ -390,10 +476,8 @@ def test_shot_placement_scales_declared_durations_onto_the_span() -> None:
             role="narration",
         ),
     )
-    with pytest.raises(ValidationError, match="overlaps the voiced"):
-        Project.model_validate(raw)
-    # … narration inside the truly silent first half is accepted, and the
-    # mixer's ducking windows agree with the gate.
+    Project.model_validate(raw)
+    # No speech windows are invented from the discarded rows.
     raw = _with_elements(
         drifting,
         _audio_element(
@@ -405,7 +489,7 @@ def test_shot_placement_scales_declared_durations_onto_the_span() -> None:
     )
     project = Project.model_validate(raw)
     timeline = project.timelines.items["timeline:main"]
-    assert _timeline_speech_windows(timeline) == ((5.0, 10.0),)
+    assert not _timeline_speech_windows(timeline)
 
 
 def test_s2v_element_gates_narration_over_its_whole_span() -> None:
@@ -420,3 +504,273 @@ def test_s2v_element_gates_narration_over_its_whole_span() -> None:
     )
     with pytest.raises(ValidationError, match="overlaps the voiced"):
         Project.model_validate(raw)
+
+
+def test_two_overlapping_narration_tracks_are_rejected() -> None:
+    """The double-voice defect: re-voicing must rebind, never stack.
+
+    A narration re-synthesized with a new voice over the same span is a
+    second voice talking at once; the gate refuses it so the agent has to
+    rebind the existing Element (or delete it) instead of adding another.
+    """
+
+    raw = _with_elements(
+        _audio_element(
+            "narration-male",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+        ),
+        _audio_element(
+            "narration-female",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+        ),
+    )
+    with pytest.raises(ValidationError, match="two narration tracks"):
+        Project.model_validate(raw)
+
+
+def test_partially_overlapping_narration_is_rejected() -> None:
+    raw = _with_elements(
+        _audio_element(
+            "narration-1",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+        ),
+        _audio_element(
+            "narration-2",
+            start_tick=3_000,
+            duration_tick=5_000,
+            role="narration",
+        ),
+    )
+    with pytest.raises(ValidationError, match="double voice"):
+        Project.model_validate(raw)
+
+
+def test_adjacent_narration_segments_do_not_conflict() -> None:
+    # [0,5000) then [5000,10000): half-open spans touch but never overlap,
+    # so per-shot segmented narration stays valid.
+    raw = _with_elements(
+        _audio_element(
+            "narration-1",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+        ),
+        _audio_element(
+            "narration-2",
+            start_tick=5_000,
+            duration_tick=5_000,
+            role="narration",
+        ),
+    )
+    Project.model_validate(raw)
+
+
+def test_narration_may_overlap_bgm_and_sfx() -> None:
+    # Only narration-vs-narration is a double voice; a music bed and layered
+    # effects are meant to run under the narration.
+    raw = _with_elements(
+        _audio_element(
+            "narration-1",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+        ),
+        _audio_element(
+            "bgm-1",
+            start_tick=0,
+            duration_tick=8_000,
+            role="bgm",
+        ),
+        _audio_element(
+            "sfx-1",
+            start_tick=1_000,
+            duration_tick=3_000,
+            role="sfx",
+        ),
+    )
+    Project.model_validate(raw)
+
+
+def test_disabled_narration_does_not_gate_overlap() -> None:
+    # A disabled duplicate is not a second audible voice; the gate ignores
+    # disabled elements exactly as it does for the s2v check.
+    raw = _with_elements(
+        _audio_element(
+            "narration-on",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+        ),
+        _audio_element(
+            "narration-off",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+            enabled=False,
+        ),
+    )
+    Project.model_validate(raw)
+
+
+def test_legacy_double_narration_keeps_the_newest_take_not_id_order() -> None:
+    """A project saved before the double-voice gate must still OPEN, and the
+    repair must keep the take the user actually re-voiced to.
+
+    "Newest" is the source version's ``created_at``, NOT element order: the
+    canonical encoder sorts ``elements_by_id`` by id, so the newer take can
+    easily sort first. Here the female re-voice (``audio-version-2``, created
+    later) has an id that sorts BEFORE the male original, so any
+    order-based heuristic would keep the wrong (older male) voice.
+    """
+
+    raw = _with_elements(
+        _audio_element(  # newer re-voice, but its id sorts first
+            "aaa-female",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+            version_id="audio-version-2",
+        ),
+        _audio_element(  # older original, its id sorts last
+            "zzz-male",
+            start_tick=0,
+            duration_tick=5_000,
+            role="narration",
+            version_id="audio-version-1",
+        ),
+    )
+    versions = raw["assets"]["source_versions_by_id"]
+    versions["audio-version-2"] = {
+        **versions["audio-version-1"],
+        "version_id": "audio-version-2",
+        "logical_asset_id": "logical-audio-2",
+        "created_at": "2026-09-01T08:00:00Z",  # the re-voice, synthesized later
+    }
+    raw["schema_version"] = 9  # simulate pre-merge v9 export shape
+    assert raw["schema_version"] == 9
+
+    # Writing the same pair directly is still rejected (no repair on write).
+    with pytest.raises(ValidationError, match="two narration tracks"):
+        # Write path requires current schema version
+        v10_raw = dict(raw)
+        v10_raw["schema_version"] = 10
+        Project.model_validate(v10_raw)
+
+    # Loading repairs it: newest take kept, older take muted.
+    project = load_project_json(json.dumps(raw))
+    elements = project.timelines.items["timeline:main"].elements_by_id
+    assert elements["aaa-female"].enabled is True  # newer created_at
+    assert elements["zzz-male"].enabled is False  # older take, muted
+    assert elements["zzz-male"].creation.role == "narration"
+
+    # Idempotent: re-running the repair over its own output is a no-op.
+    repaired = migrate_project_document(raw)
+    assert migrate_project_document(repaired) == repaired
+
+
+def test_narration_repair_mutes_only_spans_the_latest_take_overlaps() -> None:
+    # Muting follows the overlap, not a blanket "one narration per
+    # timeline": [0,10) and [12,20) never touch, so both stay enabled; only
+    # the middle take [5,15), which the latest [12,20) overlaps, is muted.
+    raw = _with_elements(
+        _audio_element(
+            "narration-a",
+            start_tick=0,
+            duration_tick=10_000,
+            role="narration",
+        ),
+        _audio_element(
+            "narration-b",
+            start_tick=5_000,
+            duration_tick=10_000,
+            role="narration",
+        ),
+        _audio_element(
+            "narration-c",
+            start_tick=12_000,
+            duration_tick=8_000,
+            role="narration",
+        ),
+    )
+    project = load_project_json(json.dumps(raw))
+    elements = project.timelines.items["timeline:main"].elements_by_id
+    assert elements["narration-a"].enabled is True
+    assert elements["narration-b"].enabled is False
+    assert elements["narration-c"].enabled is True
+
+
+def test_roleless_audio_roles_do_not_depend_on_json_key_order() -> None:
+    """Stamping role-less legacy audio is serialization-order independent.
+
+    ``elements_by_id`` key order is not part of a document's identity: the
+    canonical encoder sorts keys, so two orderings hash to the SAME ETag. But
+    the stamping pass accumulates narration spans as it walks, so iterating in
+    insertion order would resolve A=[0,5)/B=[4,10) to A=narration/B=sfx in one
+    ordering and the opposite in the other -- one ETag, two different mixes.
+    The walk is keyed on ``(start_tick, element_id)`` so the earliest voice is
+    always the narration.
+
+    Only narration ducks the footage audio (local_execution builds its duck
+    windows from narration tracks and mixes sfx verbatim), so a stable role
+    also means a stable duck window: [0,5) here, with B's non-overlapping tail
+    [5,10) never ducked.
+    """
+
+    forward = _with_elements(
+        _audio_element(
+            "a-track",
+            start_tick=0,
+            duration_tick=5_000,
+            role=None,
+        ),
+        _audio_element(
+            "b-track",
+            start_tick=4_000,
+            duration_tick=6_000,
+            role=None,
+        ),
+    )
+    reversed_keys = _with_elements(
+        _audio_element(
+            "b-track",
+            start_tick=4_000,
+            duration_tick=6_000,
+            role=None,
+        ),
+        _audio_element(
+            "a-track",
+            start_tick=0,
+            duration_tick=5_000,
+            role=None,
+        ),
+    )
+
+    # Same content -> identical canonical bytes -> one ETag, whichever order
+    # the keys were inserted in.
+    assert canonical_json_bytes(forward) == canonical_json_bytes(reversed_keys)
+
+    def roles(raw: dict[str, Any]) -> dict[str, str]:
+        project = load_project_json(json.dumps(raw))
+        return {
+            element_id: element.creation.role
+            for element_id, element in project.timelines.items[
+                "timeline:main"
+            ].elements_by_id.items()
+        }
+
+    # The earliest span is the narration and the later overlap is sfx in BOTH
+    # key orders, so one ETag now yields exactly one mix.
+    assert (
+        roles(forward)
+        == roles(reversed_keys)
+        == {
+            "a-track": "narration",
+            "b-track": "sfx",
+        }
+    )

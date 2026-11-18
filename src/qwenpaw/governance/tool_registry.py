@@ -429,6 +429,15 @@ def _register_non_descriptor_tools(registry: ToolRegistry) -> None:
     the global builtin set (scroll ``recall_history*``, memory manager
     tools). Keep this list documented when adding similar tools.
     """
+    # Code Mode executes model-authored Python outside the builtin catalog.
+    register_tool_governance(
+        registry,
+        python_name=f"run_code",
+        tool_type=f"shell",
+        target_param=f"code",
+        policy_name=f"RunCode",
+        owner=f"builtin",
+    )
     # Scroll strategy tools — hand-built descriptors, not global builtins.
     register_tool_governance(
         registry,
@@ -448,36 +457,29 @@ def _register_non_descriptor_tools(registry: ToolRegistry) -> None:
         owner="builtin",
     )
     # Memory manager tools are registered dynamically outside agents.tools.
-    # Local searches remain internal. The PowerContext wrapper keeps the
-    # public ``memory_search`` name but opts into its separate network policy
-    # identity because its query leaves the process.
+    # Local searches remain internal; plugin backends may override the policy
+    # identity when a query leaves the process.
     for python_name, policy_name, tool_type in (
         ("memory_search", "MemorySearch", "internal"),
+        ("memory_list_tags", "MemoryListTags", "internal"),
         ("memory_remember", "MemoryRemember", "network"),
-        (
-            "powercontext_memory_search",
-            "PowerContextMemorySearch",
-            "network",
-        ),
     ):
         register_tool_governance(
             registry,
             python_name=python_name,
             tool_type=tool_type,
-            target_param=(
-                "query" if policy_name == "PowerContextMemorySearch" else ""
-            ),
+            target_param="",
             policy_name=policy_name,
             owner="builtin",
         )
-    # Visual compact recovery is feature-scoped and collected by AgentBuilder,
+    # Current-context recall is opt-in and collected by AgentBuilder,
     # so it stays out of the global @tool_descriptor builtin set.
     register_tool_governance(
         registry,
-        python_name="recover_visual_context",
+        python_name="recall_context",
         tool_type="internal",
         target_param="",
-        policy_name="RecoverVisualContext",
+        policy_name="RecallContext",
         owner="builtin",
     )
 

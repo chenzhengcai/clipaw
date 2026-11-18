@@ -1,11 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Button, Input, message, Modal, Tabs } from "antd";
+import { Button, Input, message, Modal, Select, Tabs } from "antd";
 import i18n from "@/i18n";
 import {
   Box,
   Clapperboard,
-  Download,
   FileText,
   Film,
   Image as ImageIcon,
@@ -14,15 +13,29 @@ import {
   Music2,
   Paperclip,
   Search,
+  SquarePen,
+  Trash2,
   Upload,
-  Wand2,
 } from "lucide-react";
+import { MenuUnfoldOutlined } from "@ant-design/icons";
+import { RegeneratePill } from "@/components/workbench/PromptRichBlock";
+import type { PromptRichToken } from "@/components/workbench/PromptRichBlock";
+import PromptEditorModal, {
+  type PromptRefCandidate,
+} from "@/components/workbench/PromptEditorModal";
+import { refImageThumbUrl } from "@/components/workbench/referenceThumbs";
 import {
+  createCharacterVoice,
+  CreatorHttpError,
+  deleteSourceAssetVersion,
   getArtifactVersionMediaUrl,
   getAssetVersionMediaUrl,
+  getVoiceCapabilities,
   ingestAssetFile,
   ingestAssetValue,
+  type VoiceCapabilities,
 } from "@/api/creator";
+import { dispatchWorkGraphNode } from "@/api/creator/workGraph";
 import type {
   ArtifactVersionDocument,
   CharacterVoiceDocument,
@@ -33,14 +46,24 @@ import type {
   VisualCastLineupDocument,
   VisualVariantDocument,
 } from "@/contracts/creator";
-import { navigate, useParams, useSearchParams } from "@/routing/navigation";
+import {
+  navigate,
+  useParams,
+  usePathname,
+  useSearchParams,
+} from "@/routing/navigation";
 import {
   useReviewFieldFocus,
   useReviewMediaFocus,
 } from "@/routing/reviewFocus";
 import { useCreatorInteractionStore } from "@/store/creatorInteractionStore";
+import { useAgentDockUiStore } from "@/store/agentDockUiStore";
 import { useCreatorTaskViewStore } from "@/store/creatorTaskViewStore";
+import { useCreatorSessionStore } from "@/store/creatorSessionStore";
+import { nodeGenerating } from "@/lib/generationActivity";
 import { useProjectSnapshotStore } from "@/store/projectSnapshotStore";
+import type { ProjectEditOperation } from "@/store/projectSnapshotStore";
+import { useTimelineStore } from "@/store/timelineStore";
 import { useNarrowWorkspace, useDetailRail } from "@/lib/useNarrowWorkspace";
 import AssetMediaPreview from "@/components/assets/AssetMediaPreview";
 import DocumentUnderstanding from "@/components/assets/DocumentUnderstanding";
@@ -48,18 +71,22 @@ import SourceCacheGate from "@/components/creator/SourceCacheGate";
 import { useSourceCache } from "@/lib/sourceCache";
 import PageLoadError from "@/components/PageLoadError";
 import PageSkeleton from "@/components/PageSkeleton";
+import WorkspaceEmptyState from "@/components/WorkspaceEmptyState";
 import { selectPrimaryTimeline } from "@/selectors/timelineElementSelectors";
+import { isVoiceOnlyVisualEntity } from "@/selectors/blueprintSelectors";
+import RelatedAssetPicker from "@/components/workbench/RelatedAssetPicker";
 import { visualVariantLabel } from "@/lib/visualVariants";
 import { useTranslation } from "react-i18next";
+import {
+  creatorFieldForPointer,
+  projectJsonPointer,
+} from "@/lib/projectJsonPointer";
+import InlineReviewDiff from "@/components/agent/InlineReviewDiff";
 
-type FilterKey =
-  | "all"
-  | "source"
-  | "artifact"
-  | "visual"
-  | "image"
-  | "video"
-  | "audio";
+type FilterKey = "all" | "character" | "scene" | "prop" | "video" | "audio";
+
+/** 来源下拉 (design 84:78645): 视觉设定 / 生成产物 / 上传素材. */
+type OriginKey = "any" | "visual" | "artifact" | "source";
 type AssetItem = {
   id: string;
   ref: string;
@@ -80,6 +107,8 @@ type AssetItem = {
   variantOrder?: number;
   variantLabel?: string;
   variantState?: "active" | "history" | "unselected";
+  /** All versions of the owning slot — one card, switchable preview. */
+  versions?: AssetVersionOption[];
   provenanceRefs: string[];
   metadata: Record<string, unknown>;
   raw:
@@ -89,23 +118,196 @@ type AssetItem = {
     | VisualCastLineupDocument;
 };
 
+type AssetVersionOption = {
+  id: string;
+  name: string;
+  stale?: boolean;
+  selected: boolean;
+  mediaKind: string;
+  mediaType: string;
+  previewUrl?: string;
+  createdAt?: string;
+  raw: ArtifactVersionDocument;
+};
+
 type AssetItemGroup = {
   key: string;
   label: string | null;
   badge?: string;
   countLabel?: string;
+  /** Ownership groups link back to the blueprint (plan §4.7). */
+  blueprint?: boolean;
   items: AssetItem[];
 };
 
 const FILTERS: Array<{ key: FilterKey; labelKey: string }> = [
   { key: "all", labelKey: "assets.all" },
-  { key: "source", labelKey: "assets.source" },
-  { key: "artifact", labelKey: "assets.artifact" },
-  { key: "visual", labelKey: "assets.visual" },
-  { key: "image", labelKey: "assets.image" },
+  { key: "character", labelKey: "assets.character" },
+  { key: "scene", labelKey: "assets.scene" },
+  { key: "prop", labelKey: "assets.prop" },
   { key: "video", labelKey: "assets.video" },
   { key: "audio", labelKey: "assets.audio" },
 ];
+
+const ORIGINS: Array<{ key: OriginKey; labelKey: string }> = [
+  { key: "any", labelKey: "assets.originAll" },
+  { key: "visual", labelKey: "assets.visual" },
+  { key: "artifact", labelKey: "assets.artifact" },
+  { key: "source", labelKey: "assets.source" },
+];
+
+/**
+ * One entry of the structured ``details.timelineReferences`` a 409
+ * ASSET_IN_USE carries: which timeline element still points at the asset and
+ * whether a force delete may clear that pointer in place.
+ */
+type AssetInUseReference = {
+  timelineId: string;
+  timelineName: string;
+  isSnapshot: boolean;
+  elementId: string;
+  elementLabel: string;
+  creationType: string;
+  refKind: string;
+  detachable: boolean;
+  pointer?: string;
+};
+
+const ASSET_REF_KIND_LABEL_KEYS: Record<string, string> = {
+  "i2v-first-frame": "assets.refKind.i2vFirstFrame",
+  "s2v-portrait": "assets.refKind.s2vPortrait",
+  "s2v-drive-audio": "assets.refKind.s2vDriveAudio",
+  "r2v-storyboard-ref": "assets.refKind.r2vStoryboardRef",
+  "r2v-video-ref": "assets.refKind.r2vVideoRef",
+  "overlay-ref": "assets.refKind.overlayRef",
+  "render-source": "assets.refKind.renderSource",
+  "audio-source": "assets.refKind.audioSource",
+};
+
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+/**
+ * Timeline references behind an ``ASSET_IN_USE`` conflict, or null when the
+ * error says something else. null keeps the generic failure toast in charge so
+ * an unexpected payload never turns into a silently unexplained delete.
+ */
+function assetInUseReferences(error: unknown): AssetInUseReference[] | null {
+  if (
+    !(error instanceof CreatorHttpError) ||
+    error.status !== 409 ||
+    error.code !== "ASSET_IN_USE"
+  ) {
+    return null;
+  }
+  const raw = error.details.timelineReferences;
+  if (!Array.isArray(raw)) return null;
+  const references = raw.filter(
+    (item): item is AssetInUseReference =>
+      Boolean(item) &&
+      typeof item === "object" &&
+      typeof (item as AssetInUseReference).refKind === "string",
+  );
+  return references.length ? references : null;
+}
+
+function assetInUseItem(ref: AssetInUseReference, t: Translate): string {
+  const labelKey = ASSET_REF_KIND_LABEL_KEYS[ref.refKind];
+  return t("assets.deleteInUseItem", {
+    timeline: ref.timelineName || ref.timelineId,
+    element: ref.elementLabel || ref.elementId,
+    refKind: labelKey ? t(labelKey) : ref.refKind,
+  });
+}
+
+function assetInUseBlockedItem(ref: AssetInUseReference, t: Translate): string {
+  const reasonKey =
+    ref.refKind === "audio-source" || ref.creationType === "audio"
+      ? "assets.blockedReason.audio"
+      : ref.creationType === "edit"
+      ? "assets.blockedReason.edit"
+      : ref.creationType === "overlay"
+      ? "assets.blockedReason.overlay"
+      : "assets.blockedReason.default";
+  return t("assets.deleteInUseBlockedItem", {
+    timeline: ref.timelineName || ref.timelineId,
+    element: ref.elementLabel || ref.elementId,
+    reason: t(reasonKey),
+  });
+}
+
+/** Ask for the force retry, naming every reference the delete will clear.
+ *
+ * Only one force dialog may be visible at a time: a late 409 racing a
+ * prior cancel must never re-open the confirmation the user already
+ * dismissed.  The guard ref is owned by the page instance so navigation
+ * (and the matching ``Modal.destroyAll``) releases it even when Ant
+ * Design's imperative ``Modal.confirm`` never fires ``onCancel``. */
+function confirmAssetForceDelete(
+  references: AssetInUseReference[],
+  t: Translate,
+  forceActiveRef: React.MutableRefObject<boolean>,
+): Promise<boolean> {
+  if (forceActiveRef.current) return Promise.resolve(false);
+  forceActiveRef.current = true;
+  return new Promise((resolve) => {
+    const done = (value: boolean) => {
+      forceActiveRef.current = false;
+      resolve(value);
+    };
+    Modal.confirm({
+      title: t("assets.deleteInUseTitle"),
+      content: (
+        <div className="space-y-2">
+          <p>{t("assets.deleteInUseContent")}</p>
+          <ul className="list-disc pl-5">
+            {references.map((ref) => (
+              <li key={ref.pointer ?? `${ref.elementId}:${ref.refKind}`}>
+                {assetInUseItem(ref, t)}
+              </li>
+            ))}
+          </ul>
+          {references.some((ref) => ref.isSnapshot) && (
+            <p className="text-[var(--color-text-secondary)]">
+              {t("assets.deleteInUseSnapshotHint")}
+            </p>
+          )}
+        </div>
+      ),
+      okText: t("assets.deleteInUseOk"),
+      okType: "danger",
+      cancelText: t("common.cancel"),
+      onOk: () => done(true),
+      onCancel: () => done(false),
+    });
+  });
+}
+
+/**
+ * Tell the user to delete the element first: an audio or edit element cannot
+ * survive losing its source version, and neither can a text-free sticker whose
+ * only payload is this asset, so no retry could succeed here.
+ */
+function showAssetInUseBlocked(
+  references: AssetInUseReference[],
+  t: Translate,
+): void {
+  Modal.warning({
+    title: t("assets.deleteInUseBlockedTitle"),
+    content: (
+      <div className="space-y-2">
+        <p>{t("assets.deleteInUseBlockedContent")}</p>
+        <ul className="list-disc pl-5">
+          {references.map((ref) => (
+            <li key={ref.pointer ?? `${ref.elementId}:${ref.refKind}`}>
+              {assetInUseBlockedItem(ref, t)}
+            </li>
+          ))}
+        </ul>
+      </div>
+    ),
+    okText: t("common.close"),
+  });
+}
 
 function fileMedia(
   project: ProjectDocument,
@@ -124,27 +326,6 @@ function fileMedia(
     ? "text"
     : "other";
   return { kind, type };
-}
-
-const MIME_EXTENSION_MAP: Record<string, string> = {
-  "video/mp4": ".mp4",
-  "video/quicktime": ".mov",
-  "video/webm": ".webm",
-  "video/x-matroska": ".mkv",
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-  "audio/mpeg": ".mp3",
-  "audio/wav": ".wav",
-  "audio/ogg": ".ogg",
-};
-
-function downloadName(name: string, mediaType: string): string {
-  const base = name.trim() || "download";
-  if (/\.[a-zA-Z0-9]{1,10}$/.test(base)) return base;
-  const ext =
-    MIME_EXTENSION_MAP[mediaType.split(";")[0].trim().toLowerCase()] ?? "";
-  return ext ? `${base}${ext}` : base;
 }
 
 // Source version ids whose long-source graph memory is built FOR THE
@@ -306,8 +487,92 @@ function assetItems(project: ProjectDocument): AssetItem[] {
       raw: source,
     }),
   );
-  const artifacts = Object.values(project.assets.artifact_versions_by_id).map(
-    (artifact): AssetItem => {
+  // Slot-first artifact cards: every ArtifactSlot occupies ONE position and
+  // its versions switch inline (no flat tiling of stale history). Scripts
+  // are text workproducts reviewed on the blueprint, not library assets.
+  const slottedVersionIds = new Set<string>();
+  const slotArtifacts = Object.values(project.assets.artifact_slots_by_id)
+    .filter(
+      (slot) =>
+        slot.kind !== "timeline_script" &&
+        slot.kind !== "research_report" &&
+        slot.version_ids.length > 0,
+    )
+    .flatMap((slot): AssetItem[] => {
+      for (const versionId of slot.version_ids) {
+        slottedVersionIds.add(versionId);
+      }
+      const versions = slot.version_ids
+        .map((versionId) => project.assets.artifact_versions_by_id[versionId])
+        .filter((version): version is ArtifactVersionDocument =>
+          Boolean(version),
+        )
+        .map((version): AssetVersionOption => {
+          const media = artifactMedia(project, version);
+          return {
+            id: version.version_id,
+            name: version.name || version.version_id,
+            stale: version.stale,
+            selected: version.version_id === slot.selected_version_id,
+            mediaKind: media.kind,
+            mediaType: media.type,
+            previewUrl: ["image", "video", "audio"].includes(media.kind)
+              ? getArtifactVersionMediaUrl(version.version_id)
+              : undefined,
+            createdAt: version.created_at,
+            raw: version,
+          };
+        });
+      if (!versions.length) return [];
+      const active =
+        versions.find((version) => version.selected) ??
+        versions[versions.length - 1];
+      const artifact = active.raw;
+      const visualVariant = visualVariantForVersion(project, active.id);
+      return [
+        {
+          id: slot.slot_id,
+          ref: `artifact-version:${active.id}`,
+          kind: "artifact",
+          name: active.name,
+          description:
+            versions.length > 1
+              ? `${slot.kind} · ${i18n.t("assets.versionCount", {
+                  count: versions.length,
+                })}`
+              : `${slot.kind} · generation ${artifact.based_on_generation}`,
+          mediaKind: active.mediaKind,
+          mediaType: active.mediaType,
+          previewUrl: active.previewUrl,
+          createdAt: active.createdAt,
+          stale: artifact.stale,
+          durationSeconds: artifact.duration_seconds,
+          checksum: artifact.checksum,
+          ownerRef: artifact.owner_ref,
+          entityId: visualVariant?.entity.entity_id,
+          variantId: visualVariant?.variant.variant_id,
+          versions: versions.length > 1 ? versions : undefined,
+          provenanceRefs: artifact.provenance_refs,
+          metadata: artifact.metadata,
+          raw: artifact,
+        },
+      ];
+    });
+  const scriptVersionIds = new Set(
+    Object.values(project.assets.artifact_slots_by_id)
+      .filter(
+        (slot) =>
+          slot.kind === "timeline_script" || slot.kind === "research_report",
+      )
+      .flatMap((slot) => slot.version_ids),
+  );
+  const artifacts = Object.values(project.assets.artifact_versions_by_id)
+    .filter(
+      (artifact) =>
+        !slottedVersionIds.has(artifact.version_id) &&
+        !scriptVersionIds.has(artifact.version_id),
+    )
+    .map((artifact): AssetItem => {
       const media = artifactMedia(project, artifact);
       const visualVariant = visualVariantForVersion(
         project,
@@ -348,8 +613,7 @@ function assetItems(project: ProjectDocument): AssetItem[] {
         metadata: artifact.metadata,
         raw: artifact,
       };
-    },
-  );
+    });
   const visuals = project.visual.entities.order.flatMap(
     (entityId): AssetItem[] => {
       const entity = project.visual.entities.items[entityId];
@@ -478,6 +742,7 @@ function assetItems(project: ProjectDocument): AssetItem[] {
     ...lineups,
     ...visuals,
     ...sources,
+    ...slotArtifacts,
     ...artifacts,
   ]).sort((left, right) => {
     return (
@@ -509,6 +774,7 @@ function visualItemGroups(
   }
 
   const characterGroups: AssetItemGroup[] = [];
+  const voiceGroups: AssetItemGroup[] = [];
   const sceneItems: AssetItem[] = [];
   const propItems: AssetItem[] = [];
   for (const entityId of project.visual.entities.order) {
@@ -523,6 +789,17 @@ function visualItemGroups(
         ),
     );
     if (entity.kind === "character") {
+      // 旁白/画外音: an enrolled voice with no visual form is not a 角色 card.
+      if (isVoiceOnlyVisualEntity(entity)) {
+        voiceGroups.push({
+          key: `voice:${entityId}`,
+          label: entity.name,
+          badge: i18n.t("assets.voiceBadge"),
+          countLabel: i18n.t("assets.voiceOnlyRole"),
+          items: entityItems,
+        });
+        continue;
+      }
       const requiredCount = entity.required_variant_ids.length;
       const definedCount = entity.variants.order.length;
       characterGroups.push({
@@ -549,6 +826,7 @@ function visualItemGroups(
 
   return [
     ...characterGroups,
+    ...voiceGroups,
     ...(sceneItems.length
       ? [
           {
@@ -601,6 +879,11 @@ function visualItemGroups(
 }
 
 /**
+ * Ownership projection (plan §4.7): scripts / visual development (per
+ * entity) / research & understanding / shots & final cuts / source assets.
+ */
+
+/**
  * Intelligence version bound to one exact SourceAssetVersion. Repeated
  * analyses keep every record, so the Source's current pointer wins and
  * older versions fall back to their newest analysis by created_at.
@@ -634,7 +917,9 @@ function kindLabel(item: AssetItem, t: (key: string) => string): string {
   if (item.ref.startsWith("lineup:")) return t("assets.lineupLabel");
   const entity = item.raw as VisualEntityDocument;
   return entity.kind === "character"
-    ? t("assets.character")
+    ? isVoiceOnlyVisualEntity(entity)
+      ? t("assets.voiceBadge")
+      : t("assets.character")
     : entity.kind === "scene"
     ? t("assets.scene")
     : t("assets.prop");
@@ -654,14 +939,6 @@ function mediaIcon(kind: string) {
   if (kind === "image") return ImageIcon;
   if (kind === "text" || kind === "document") return FileText;
   return Box;
-}
-
-function displayValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  if (value === null || value === undefined) return "—";
-  return JSON.stringify(value);
 }
 
 /** Resolve a provenance/ref string to a previewable thumbnail + label. */
@@ -739,13 +1016,189 @@ function resolveProvenanceRef(
   return null;
 }
 
-interface PromptTarget {
+export interface PromptTarget {
   pointer: string;
   value: string;
   label: string;
+  /** [Image N] references insertable in the fullscreen editor. */
+  tokens?: PromptRichToken[];
+  /** Where newly picked references persist (visual variants only). */
+  referenceBinding?: {
+    base: string;
+    assetIds: string[];
+    artifactIds: string[];
+  };
+  /** Project assets addable as brand-new references. */
+  candidates?: PromptRefCandidate[];
 }
 
-function visualEntityPromptTarget(
+function referenceVersionDisplayName(
+  project: ProjectDocument,
+  versionId: string,
+): string {
+  return (
+    project.assets.artifact_versions_by_id[versionId]?.name ??
+    project.assets.source_versions_by_id[versionId]?.name ??
+    versionId
+  );
+}
+
+/** Variant reference images become editor tokens, numbered by their order. */
+function variantReferenceTokens(
+  project: ProjectDocument,
+  variant: VisualVariantDocument,
+): PromptRichToken[] {
+  const versionIds = [
+    ...variant.reference_asset_version_ids,
+    ...variant.reference_artifact_version_ids,
+  ];
+  return versionIds.map((versionId, position) => {
+    const anchor = visualAnchorToken(project, versionId);
+    if (anchor) return { ...anchor, index: position + 1 };
+    return {
+      index: position + 1,
+      name: referenceVersionDisplayName(project, versionId),
+      kind: "artifact" as const,
+      thumbUrl: refImageThumbUrl(
+        project,
+        null,
+        project.assets.artifact_versions_by_id[versionId]
+          ? `artifact-version:${versionId}`
+          : `asset-version:${versionId}`,
+      ),
+    };
+  });
+}
+
+/** A style anchor `visual:<entityId>:<variantId>` presents as the base
+    entity itself; before the base image exists the token has no thumb. */
+function resolveVisualAnchor(
+  project: ProjectDocument,
+  ref: string,
+): { name: string; versionId: string | null } | null {
+  if (!ref.startsWith("visual:")) return null;
+  for (const entityId of project.visual.entities.order) {
+    const entity = project.visual.entities.items[entityId];
+    if (!entity) continue;
+    for (const variantId of entity.variants.order) {
+      if (ref !== `visual:${entityId}:${variantId}`) continue;
+      return {
+        name: entity.name || entityId,
+        versionId:
+          entity.variants.items[variantId]?.selected_artifact_version_id ??
+          null,
+      };
+    }
+  }
+  return { name: ref, versionId: null };
+}
+
+function visualAnchorToken(
+  project: ProjectDocument,
+  ref: string,
+): Omit<PromptRichToken, "index"> | null {
+  const anchor = resolveVisualAnchor(project, ref);
+  if (!anchor) return null;
+  return {
+    name: anchor.name,
+    kind: "artifact" as const,
+    thumbUrl: anchor.versionId
+      ? refImageThumbUrl(project, null, `artifact-version:${anchor.versionId}`)
+      : null,
+  };
+}
+
+/** Project image assets not yet referenced by this variant — pickable in the
+ *  editor as brand-new [Image N] references. */
+function variantReferenceCandidates(
+  project: ProjectDocument,
+  variant: VisualVariantDocument,
+): PromptRefCandidate[] {
+  const taken = new Set([
+    ...variant.reference_asset_version_ids,
+    ...variant.reference_artifact_version_ids,
+    ...variant.generated_artifact_version_ids,
+  ]);
+  // A style anchor occupies its base image's slot: offering that image
+  // again would duplicate the reference and break [Image N] numbering.
+  for (const ref of variant.reference_artifact_version_ids) {
+    const versionId = resolveVisualAnchor(project, ref)?.versionId;
+    if (versionId) taken.add(versionId);
+  }
+  // Artifact versions produced by a visual entity's variants carry that
+  // entity's kind so the condensed asset-library picker can offer real
+  // category tabs; loose versions stay "material".
+  const kindByVersionId = new Map<string, PromptRefCandidate["kind"]>();
+  for (const entityId of project.visual.entities.order) {
+    const entity = project.visual.entities.items[entityId];
+    if (!entity) continue;
+    for (const variantId of entity.variants.order) {
+      for (const versionId of entity.variants.items[variantId]
+        ?.generated_artifact_version_ids ?? []) {
+        kindByVersionId.set(
+          versionId,
+          entity.kind as PromptRefCandidate["kind"],
+        );
+      }
+    }
+  }
+  const sources = Object.values(project.assets.source_versions_by_id)
+    .filter(
+      (version) =>
+        version.media_kind === "image" && !taken.has(version.version_id),
+    )
+    .map((version) => ({
+      id: version.version_id,
+      name: version.name || version.version_id,
+      kind: "material" as const,
+      thumbUrl: refImageThumbUrl(
+        project,
+        null,
+        `asset-version:${version.version_id}`,
+      ),
+    }));
+  const artifacts = Object.values(project.assets.artifact_versions_by_id)
+    .filter((version) => {
+      if (taken.has(version.version_id)) return false;
+      const mediaType =
+        project.assets.files_by_id[version.file_id]?.media_type ?? "";
+      return mediaType.startsWith("image/");
+    })
+    .map((version) => ({
+      id: version.version_id,
+      name: version.name || version.version_id,
+      kind: kindByVersionId.get(version.version_id) ?? ("material" as const),
+      thumbUrl: refImageThumbUrl(
+        project,
+        null,
+        `artifact-version:${version.version_id}`,
+      ),
+    }));
+  return [...sources, ...artifacts];
+}
+
+/** Work-graph node the prompt regenerates through — manual dispatch, no agent. */
+export function dispatchNodeIdForPrompt(pointer: string): string | null {
+  let match =
+    /^\/visual\/entities\/items\/([^/]+)\/variants\/items\/([^/]+)\/prompt$/.exec(
+      pointer,
+    );
+  if (match) return `visual:${match[1]}:${match[2]}`;
+  match = /^\/visual\/cast_lineups\/items\/([^/]+)\/relative_notes$/.exec(
+    pointer,
+  );
+  if (match) return `lineup:${match[1]}`;
+  match = /\/elements_by_id\/([^/]+)\/creation\/video_prompt$/.exec(pointer);
+  if (match) return `video:${match[1]}`;
+  match = /\/elements_by_id\/([^/]+)\/creation\/storyboard_prompt$/.exec(
+    pointer,
+  );
+  if (match) return `storyboard:${match[1]}`;
+  return null;
+}
+
+export function visualEntityPromptTarget(
+  project: ProjectDocument,
   entity: VisualEntityDocument,
   versionId: string | null,
   requestedVariantId?: string,
@@ -765,9 +1218,33 @@ function visualEntityPromptTarget(
   const variant = variantId ? entity.variants.items[variantId] : null;
   if (!variant) return null;
   return {
-    pointer: `/visual/entities/items/${entity.entity_id}/variants/items/${variant.variant_id}/prompt`,
+    pointer: projectJsonPointer(
+      "visual",
+      "entities",
+      "items",
+      entity.entity_id,
+      "variants",
+      "items",
+      variant.variant_id,
+      "prompt",
+    ),
     value: variant.prompt,
     label: i18n.t("assets.generationPrompt"),
+    tokens: variantReferenceTokens(project, variant),
+    candidates: variantReferenceCandidates(project, variant),
+    referenceBinding: {
+      base: projectJsonPointer(
+        "visual",
+        "entities",
+        "items",
+        entity.entity_id,
+        "variants",
+        "items",
+        variant.variant_id,
+      ),
+      assetIds: variant.reference_asset_version_ids,
+      artifactIds: variant.reference_artifact_version_ids,
+    },
   };
 }
 
@@ -789,6 +1266,7 @@ function generationPromptTarget(
   if (selected.kind === "visual") {
     const entity = selected.raw as VisualEntityDocument;
     return visualEntityPromptTarget(
+      project,
       entity,
       selected.variantId
         ? entity.variants.items[selected.variantId]
@@ -808,6 +1286,7 @@ function generationPromptTarget(
       ];
     return entity
       ? visualEntityPromptTarget(
+          project,
           entity,
           selected.id,
           visualVariant?.variant.variant_id,
@@ -816,7 +1295,8 @@ function generationPromptTarget(
   }
   if (ownerRef.startsWith("element:")) {
     const elementId = ownerRef.slice("element:".length);
-    const timeline = selectPrimaryTimeline(project);
+    const activeTid = useTimelineStore.getState().activeTimelineId;
+    const timeline = selectPrimaryTimeline(project, activeTid);
     const element = timeline?.elements_by_id[elementId];
     if (!timeline || !element) return null;
     const base = `/timelines/items/${timeline.timeline_id}/elements_by_id/${elementId}/creation`;
@@ -847,64 +1327,304 @@ function generationPromptTarget(
   return null;
 }
 
-/** Editable generation-prompt block; key is bound to the pointer so drafts reset when the selection changes. */
-function GenerationPromptEditor({
+/** Prompt block: read-only text with 编辑 / 重新生成. 编辑 opens the same
+ *  fullscreen token editor as the R2V workbench (reference images insert as
+ *  pills); 重新生成 dispatches the matching work-graph node directly. */
+/** Build the patch ops for a prompt edit: text replace + newly picked
+ *  reference ids appended to the variant's reference bindings. */
+export function buildPromptSaveOperations(
+  project: ProjectDocument,
+  target: PromptTarget,
+  next: string,
+  addedReferenceIds: string[],
+): ProjectEditOperation[] {
+  const operations: ProjectEditOperation[] = [];
+  if (next !== target.value) {
+    operations.push({
+      op: "replace",
+      path: target.pointer,
+      before: target.value,
+      value: next,
+    });
+  }
+  const binding = target.referenceBinding;
+  if (binding && addedReferenceIds.length > 0) {
+    const addedAssets = addedReferenceIds.filter(
+      (versionId) => project.assets.source_versions_by_id[versionId],
+    );
+    const addedArtifacts = addedReferenceIds.filter(
+      (versionId) => !addedAssets.includes(versionId),
+    );
+    if (addedAssets.length) {
+      operations.push({
+        op: "replace",
+        path: `${binding.base}/reference_asset_version_ids`,
+        before: binding.assetIds,
+        value: [...binding.assetIds, ...addedAssets],
+      });
+    }
+    if (addedArtifacts.length) {
+      operations.push({
+        op: "replace",
+        path: `${binding.base}/reference_artifact_version_ids`,
+        before: binding.artifactIds,
+        value: [...binding.artifactIds, ...addedArtifacts],
+      });
+    }
+  }
+  return operations;
+}
+
+export function GenerationPromptEditor({
   target,
   onSave,
+  onRegenerate,
+  regenerateLabel,
   saving,
+  regenerating = false,
 }: {
   target: PromptTarget;
-  onSave: (target: PromptTarget, next: string) => Promise<void>;
+  onSave: (
+    target: PromptTarget,
+    next: string,
+    addedReferenceIds: string[],
+  ) => Promise<void>;
+  onRegenerate?: () => void;
+  regenerateLabel: string;
   saving: boolean;
+  regenerating?: boolean;
 }) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState(target.value);
-  const dirty = draft !== target.value;
+  const [editOpen, setEditOpen] = useState(false);
+  // An empty prompt is a planned-but-unwritten target only until someone
+  // writes it: a user clearing the prompt to rewrite must not lock the
+  // editor out, so the awaiting state is sticky-off once non-empty.
+  const everWritten = useRef(!!target.value.trim());
+  if (target.value.trim()) everWritten.current = true;
+  const awaitingAgent = !everWritten.current;
+  const softPill =
+    "inline-flex h-10 shrink-0 cursor-pointer select-none items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-4 text-sm font-medium leading-6 text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-50";
   return (
     <div
       data-creator-path={target.pointer}
       data-creator-field-label={target.label}
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3"
+      className="space-y-1.5"
     >
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1 text-xs font-semibold text-[var(--color-text-secondary)]">
-          <Wand2 className="h-3.5 w-3.5" />
-          {target.label}
-        </span>
-        <div className="flex gap-1.5">
-          {dirty && (
-            <Button size="small" onClick={() => setDraft(target.value)}>
-              {t("common.reset")}
-            </Button>
-          )}
-          <Button
-            size="small"
-            type="primary"
-            disabled={!dirty}
-            loading={saving}
-            onClick={() => void onSave(target, draft)}
+      <span className="block text-sm text-[var(--color-text-primary)]">
+        {target.label}
+      </span>
+      <div className="space-y-2 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/50 p-3">
+        <p
+          data-creator-field={creatorFieldForPointer(target.pointer)}
+          data-creator-path={target.pointer}
+          data-creator-field-label={target.label}
+          className="max-h-[135px] select-text overflow-y-auto whitespace-pre-wrap text-xs leading-[1.6] text-[var(--color-text-primary)]"
+        >
+          {target.value ||
+            (awaitingAgent
+              ? t("r2v.awaitAgentPrompt")
+              : t("r2v.generateAndEdit", { label: target.label }))}
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            data-prompt-edit={target.pointer}
+            disabled={saving || awaitingAgent}
+            className={softPill}
+            onClick={() => setEditOpen(true)}
           >
-            {t("common.save")}
-          </Button>
+            <SquarePen className="h-5 w-5" />
+            {t("common.edit")}
+          </button>
+          {onRegenerate && (
+            <span data-asset-regenerate>
+              <RegeneratePill
+                field={target.pointer}
+                label={regenerateLabel}
+                loading={regenerating}
+                disabled={saving || awaitingAgent}
+                onClick={onRegenerate}
+              />
+            </span>
+          )}
         </div>
       </div>
-      <Input.TextArea
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        autoSize={{ minRows: 3, maxRows: 10 }}
-        placeholder={t("assets.promptPlaceholder")}
-        className="!text-xs"
+      <PromptEditorModal
+        open={editOpen}
+        label={target.label}
+        initialValue={target.value}
+        sourceKey={target.pointer}
+        tokens={target.tokens ?? []}
+        candidates={target.candidates ?? []}
+        disabled={saving}
+        onCancel={() => setEditOpen(false)}
+        onDone={(next, addedReferenceIds) => {
+          if (next === target.value && !addedReferenceIds.length) {
+            setEditOpen(false);
+            return;
+          }
+          // Preserve the modal draft when persistence or a CAS check fails.
+          void onSave(target, next, addedReferenceIds)
+            .then(() => setEditOpen(false))
+            .catch(() => {});
+        }}
       />
-      <p className="mt-1.5 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
-        {t("assets.promptSaveHint")}
-      </p>
     </div>
+  );
+}
+
+/** Voice generation dialog: design prompt (when the TTS model supports it)
+ *  and/or an audio sample; submits straight to the enrollment executor. */
+export function VoiceGenerationModal({
+  open,
+  projectId,
+  entity,
+  onClose,
+}: {
+  open: boolean;
+  projectId: string;
+  entity: VisualEntityDocument | null;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const project = useProjectSnapshotStore((state) =>
+    state.projectId === projectId ? state.project : null,
+  );
+  const [capabilities, setCapabilities] = useState<VoiceCapabilities | null>(
+    null,
+  );
+  const [voicePrompt, setVoicePrompt] = useState("");
+  const [sampleId, setSampleId] = useState<string | null>(null);
+  const [samplePickerOpen, setSamplePickerOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!open || !entity) return;
+    setVoicePrompt(entity.voice?.voice_prompt || "");
+    setSampleId(entity.voice?.sample_source_version_id ?? null);
+    setSamplePickerOpen(false);
+    setCapabilities(null);
+    void getVoiceCapabilities(projectId)
+      .then(setCapabilities)
+      .catch(() => setCapabilities(null));
+    // Sampled per opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const supportsDesign = capabilities?.supportsDesign ?? false;
+  const audioOptions = project
+    ? Object.values(project.assets.source_versions_by_id)
+        .filter((version) => version.media_kind === "audio")
+        .map((version) => ({
+          value: version.version_id,
+          label: version.name || version.version_id,
+        }))
+    : [];
+  const submit = async () => {
+    if (!entity) return;
+    const prompt = supportsDesign && !sampleId ? voicePrompt.trim() : "";
+    if (!prompt && !sampleId) {
+      message.error(t("assets.voiceNeedInput"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await createCharacterVoice(projectId, {
+        characterRef: `asset:${entity.entity_id}`,
+        ...(prompt ? { voicePrompt: prompt } : {}),
+        ...(sampleId ? { sampleSourceVersionId: sampleId } : {}),
+        preferredName: entity.name,
+      });
+      message.success(t("assets.voiceDone"));
+      void useProjectSnapshotStore.getState().pollOnce(projectId);
+      onClose();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open={open}
+      title={t("assets.voiceModalTitle", { name: entity?.name ?? "" })}
+      okText={t("assets.voiceModalConfirm")}
+      cancelText={t("common.cancel")}
+      confirmLoading={busy}
+      onOk={() => void submit()}
+      onCancel={onClose}
+      destroyOnHidden
+    >
+      <div className="space-y-3 py-1">
+        {supportsDesign && (
+          <div className="space-y-1.5">
+            <span className="block text-xs font-medium text-[var(--color-text-secondary)]">
+              {t("assets.voicePromptLabel")}
+            </span>
+            <Input.TextArea
+              value={voicePrompt}
+              disabled={Boolean(sampleId)}
+              onChange={(event) => setVoicePrompt(event.target.value)}
+              autoSize={{ minRows: 3, maxRows: 8 }}
+              placeholder={t("assets.voicePromptPlaceholder")}
+              className="!text-xs"
+            />
+          </div>
+        )}
+        <div className="space-y-1.5">
+          <span className="block text-xs font-medium text-[var(--color-text-secondary)]">
+            {supportsDesign
+              ? t("assets.voiceSampleOptional")
+              : t("assets.voiceSampleRequired")}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              className="min-w-0 flex-1"
+              onClick={() => setSamplePickerOpen(true)}
+            >
+              {audioOptions.find((item) => item.value === sampleId)?.label ??
+                t("assets.voiceSamplePlaceholder")}
+            </Button>
+            {sampleId && (
+              <Button onClick={() => setSampleId(null)}>
+                {t("common.clear")}
+              </Button>
+            )}
+          </div>
+          {sampleId && (
+            <audio
+              src={getAssetVersionMediaUrl(sampleId)}
+              controls
+              preload="none"
+              className="mt-2 h-9 w-full"
+            />
+          )}
+        </div>
+      </div>
+      <RelatedAssetPicker
+        open={samplePickerOpen}
+        title={t("assets.voiceSamplePlaceholder")}
+        candidates={audioOptions.map((option) => ({
+          id: option.value,
+          name: option.label,
+          kind: "material",
+          thumbUrl: null,
+          audioUrl: getAssetVersionMediaUrl(option.value),
+        }))}
+        boundIds={sampleId ? [sampleId] : []}
+        singleSelection
+        onCancel={() => setSamplePickerOpen(false)}
+        onConfirm={(ids) => {
+          setSampleId(ids[0] ?? null);
+          setSamplePickerOpen(false);
+        }}
+      />
+    </Modal>
   );
 }
 
 export default function AssetsPage() {
   const { t } = useTranslation();
   const { id = "" } = useParams();
+  const pathname = usePathname();
   const query = useSearchParams();
   const project = useProjectSnapshotStore((state) =>
     state.projectId === id ? state.project : null,
@@ -922,16 +1642,57 @@ export default function AssetsPage() {
   const patching = useProjectSnapshotStore((state) => state.patching);
   const refreshTasks = useCreatorTaskViewStore((state) => state.refresh);
   const tasks = useCreatorTaskViewStore((state) => state.tasks);
+  const refreshSession = useCreatorSessionStore(
+    (state) => state.refreshSession,
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // A delete response can land after the user already switched Project (or
+  // left this page). The refreshes below rebind the global snapshot/task
+  // stores and the selection cleanup navigates, so every step that follows an
+  // await must still belong to the page instance that issued the request.
+  const liveAssetProjectId = useRef(id);
+  liveAssetProjectId.current = id;
+  const liveAssetsPath = useRef(pathname);
+  liveAssetsPath.current = pathname;
+  const liveSelectedAsset = useRef<string | null>(query.get("asset"));
+  liveSelectedAsset.current = query.get("asset");
+  const assetsPageAlive = useRef(true);
+  // A force-delete dialog opened while the user navigates away is destroyed
+  // by the cleanup Modal.destroyAll() below, but Ant Design's imperative
+  // Modal.confirm never calls onCancel in that path.  Own the guard ref here
+  // so the page instance lifecycle frees it regardless of how the dialog
+  // disappeared.
+  const forceDialogRef = useRef(false);
+  useEffect(() => {
+    assetsPageAlive.current = true;
+    return () => {
+      assetsPageAlive.current = false;
+      // Release the force-dialog guard so the next visit to this page
+      // (or any other project) can open a fresh confirmation.  The
+      // pending promise below settles with false, preventing a leak.
+      forceDialogRef.current = false;
+      // Force-delete confirmation dialogs outlive navigation: a dialog
+      // opened on project P1 stays visible on P2 and sends P1's
+      // ?force=true. Destroy every modal this page owns on unmount so a
+      // stale confirmation never mutates a project the user left.
+      Modal.destroyAll();
+    };
+  }, []);
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [origin, setOrigin] = useState<OriginKey>("any");
+  const sidebarOpen = useAgentDockUiStore((state) => state.open);
+  const setSidebarOpen = useAgentDockUiStore((state) => state.setOpen);
   const [search, setSearch] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [voiceModalEntity, setVoiceModalEntity] =
+    useState<VisualEntityDocument | null>(null);
   const [inputKind, setInputKind] = useState<"url" | "text">("url");
   const [inputName, setInputName] = useState("");
   const [inputValue, setInputValue] = useState("");
   const selectedId = query.get("asset");
+  const requestedVariantId = query.get("variant");
   const reviewMode = query.get("review") === "1";
   const reviewField = query.get("field");
   const reviewPulse = query.get("reviewPulse");
@@ -955,41 +1716,134 @@ export default function AssetsPage() {
   );
   const items = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
+    const entityKindOf = (item: AssetItem): string | null => {
+      // Cast lineups are character-centric visual settings.
+      if (item.ref.startsWith("lineup:")) return "character";
+      if (!item.entityId || !project) return null;
+      return project.visual.entities.items[item.entityId]?.kind ?? null;
+    };
     return allItems.filter((item) => {
-      const filterMatch =
+      const typeMatch =
         filter === "all" ||
-        filter === item.kind ||
-        filter === item.mediaKind ||
-        (filter === "artifact" &&
-          item.kind === "visual" &&
-          item.variantState === "active");
+        (filter === "video" || filter === "audio"
+          ? item.mediaKind === filter
+          : item.kind === "visual" && entityKindOf(item) === filter);
+      const originMatch = origin === "any" || item.kind === origin;
       const searchMatch =
         !needle ||
         `${item.name} ${item.description} ${item.ref}`
           .toLocaleLowerCase()
           .includes(needle);
-      return filterMatch && searchMatch;
+      return typeMatch && originMatch && searchMatch;
     });
-  }, [allItems, filter, search]);
+  }, [allItems, filter, origin, search, project]);
   const itemGroups = useMemo(() => {
-    if (filter === "visual") return visualItemGroups(project, items);
-    return [
-      {
-        key: `flat:${filter}`,
-        label: null,
-        items,
-      },
-    ];
+    // Media pills render one titled section (design 资产仓库-音频 84:81503).
+    if (filter === "video" || filter === "audio") {
+      return [
+        {
+          key: `media:${filter}`,
+          label: i18n.t(`assets.${filter}`),
+          countLabel: i18n.t("assets.items", { count: items.length }),
+          items,
+        },
+      ];
+    }
+    const visualItems = items.filter((item) => item.kind === "visual");
+    const sourceItems = items.filter((item) => item.kind === "source");
+    const artifactItems = items.filter((item) => item.kind === "artifact");
+    const groups: AssetItemGroup[] = visualItemGroups(project, visualItems);
+    if (sourceItems.length) {
+      groups.push({
+        key: "sources",
+        label: i18n.t("assets.source"),
+        countLabel: i18n.t("assets.items", { count: sourceItems.length }),
+        blueprint: true,
+        items: sourceItems,
+      });
+    }
+    if (artifactItems.length) {
+      groups.push({
+        key: "artifacts",
+        label: i18n.t("assets.artifact"),
+        countLabel: i18n.t("assets.items", { count: artifactItems.length }),
+        blueprint: true,
+        items: artifactItems,
+      });
+    }
+    return groups;
   }, [filter, items, project]);
   const selected =
-    allItems.find((item) => item.id === selectedId) ||
-    allItems.find(
-      (item) =>
-        item.kind === "visual" &&
-        item.entityId === selectedId &&
-        item.variantState === "active",
-    ) ||
+    (requestedVariantId
+      ? allItems.find(
+          (item) =>
+            item.kind === "visual" &&
+            item.entityId === selectedId &&
+            item.variantId === requestedVariantId,
+        )
+      : allItems.find((item) => item.id === selectedId)) ||
+    (!requestedVariantId &&
+      (allItems.find(
+        (item) =>
+          item.kind === "visual" &&
+          item.entityId === selectedId &&
+          item.variantState === "active",
+      ) ||
+        allItems.find(
+          (item) => item.kind === "visual" && item.entityId === selectedId,
+        ))) ||
     null;
+  const reviewedVisualField = (() => {
+    if (
+      !reviewMode ||
+      !reviewField ||
+      selected?.kind !== "visual" ||
+      !selected.entityId
+    )
+      return null;
+    const entity = project?.visual.entities.items[selected.entityId];
+    if (!entity) return null;
+    const entityBase = projectJsonPointer(
+      "visual",
+      "entities",
+      "items",
+      entity.entity_id,
+    );
+    const variant = selected.variantId
+      ? entity.variants.items[selected.variantId]
+      : null;
+    const candidates = [
+      {
+        pointer: `${entityBase}/description`,
+        value: entity.description,
+        label: t("fileReview.description"),
+      },
+      {
+        pointer: `${entityBase}/continuity`,
+        value: entity.continuity,
+        label: t("blueprint.continuity"),
+      },
+      ...(variant
+        ? [
+            {
+              pointer: projectJsonPointer(
+                "visual",
+                "entities",
+                "items",
+                entity.entity_id,
+                "variants",
+                "items",
+                variant.variant_id,
+                "requirements",
+              ),
+              value: variant.requirements,
+              label: t("fileReview.content"),
+            },
+          ]
+        : []),
+    ];
+    return candidates.find((item) => item.pointer === reviewField) ?? null;
+  })();
   const selectedOriginalGate =
     selected?.kind === "source" &&
     sourceCache.versions.some(
@@ -1011,6 +1865,43 @@ export default function AssetsPage() {
         : `/project/${id}/assets`,
     );
   };
+  // Per-slot version preview choice; defaults to the selected version.
+  const [versionPick, setVersionPick] = useState<Record<string, number>>({});
+  const displayedItem = (item: AssetItem): AssetItem => {
+    if (!item.versions) return item;
+    const fallback = item.versions.findIndex((version) => version.selected);
+    const index = Math.min(
+      Math.max(versionPick[item.id] ?? Math.max(fallback, 0), 0),
+      item.versions.length - 1,
+    );
+    const version = item.versions[index];
+    if (!version || version.raw === item.raw) return item;
+    return {
+      ...item,
+      ref: `artifact-version:${version.id}`,
+      name: version.name,
+      mediaKind: version.mediaKind,
+      mediaType: version.mediaType,
+      previewUrl: version.previewUrl,
+      createdAt: version.createdAt,
+      stale: version.raw.stale,
+      checksum: version.raw.checksum,
+      durationSeconds: version.raw.duration_seconds,
+      provenanceRefs: version.raw.provenance_refs,
+      metadata: version.raw.metadata,
+      raw: version.raw,
+    };
+  };
+  const stepVersion = (item: AssetItem, delta: number) => {
+    if (!item.versions) return;
+    const fallback = item.versions.findIndex((version) => version.selected);
+    const current = versionPick[item.id] ?? Math.max(fallback, 0);
+    const next = Math.min(
+      Math.max(current + delta, 0),
+      item.versions.length - 1,
+    );
+    setVersionPick((state) => ({ ...state, [item.id]: next }));
+  };
   const refreshAfterIngest = async () => {
     await Promise.allSettled([pollOnce(id), refreshTasks(id)]);
   };
@@ -1018,8 +1909,17 @@ export default function AssetsPage() {
     setUploading(true);
     setUploadError(null);
     try {
-      await ingestAssetFile(id, file, "ATTACH_SOURCE");
-      message.success(t("assets.uploadSuccess"));
+      const accepted = await ingestAssetFile(id, file, "ATTACH_SOURCE");
+      if (accepted.reused) {
+        // The Project already held these exact bytes, so nothing new landed:
+        // reporting a successful upload would promise a card that never came.
+        // Name the card that is really there, which survives a re-rename.
+        message.info(
+          t("assets.uploadReused", { name: accepted.reusedName || file.name }),
+        );
+      } else {
+        message.success(t("assets.uploadSuccess"));
+      }
       await refreshAfterIngest();
     } catch (error) {
       // Keep a persistent inline banner besides the transient toast so the
@@ -1041,17 +1941,24 @@ export default function AssetsPage() {
     setUploading(true);
     setUploadError(null);
     try {
-      await ingestAssetValue(id, {
+      const name = inputName.trim();
+      const accepted = await ingestAssetValue(id, {
         kind: inputKind,
-        name: inputName.trim(),
+        name,
         value: inputValue.trim(),
         postIngestAction: "ATTACH_SOURCE",
       });
-      message.success(
-        inputKind === "url"
-          ? t("assets.linkSubmitted")
-          : t("assets.textSubmitted"),
-      );
+      if (accepted.reused) {
+        message.info(
+          t("assets.uploadReused", { name: accepted.reusedName || name }),
+        );
+      } else {
+        message.success(
+          inputKind === "url"
+            ? t("assets.linkSubmitted")
+            : t("assets.textSubmitted"),
+        );
+      }
       setAddOpen(false);
       setInputName("");
       setInputValue("");
@@ -1064,6 +1971,102 @@ export default function AssetsPage() {
     } finally {
       setUploading(false);
     }
+  };
+
+  const handleDeleteSourceAsset = async (versionId: string, name: string) => {
+    Modal.confirm({
+      title: t("assets.deleteConfirmTitle"),
+      content: t("assets.deleteConfirmContent", { name }),
+      okText: t("assets.deleteConfirmOk"),
+      okType: "danger",
+      cancelText: t("common.cancel"),
+      onOk: async () => {
+        const scopeProjectId = id;
+        const ownsScope = () => {
+          if (
+            !assetsPageAlive.current ||
+            liveAssetProjectId.current !== scopeProjectId
+          ) {
+            return false;
+          }
+          // Router also matches "/project/p1/assets/" and keeps that slash in
+          // location.pathname, so compare the normalized path: an exact match
+          // would read a user who never left the page as gone and skip both
+          // the refreshes and the selection cleanup below.
+          const expected = `/project/${scopeProjectId}/assets`;
+          return (
+            (liveAssetsPath.current.replace(/\/+$/, "") || "/") === expected
+          );
+        };
+        // Delete failure and post-delete refresh must be isolated: a refresh
+        // error must never be reported as "delete failed" once the 204 landed.
+        const reportFailure = (error: unknown) => {
+          const text =
+            error instanceof Error ? error.message : t("assets.deleteFailed");
+          message.error(text, 6);
+        };
+        try {
+          if (!ownsScope()) return;
+          await deleteSourceAssetVersion(id, versionId);
+        } catch (error) {
+          const references = assetInUseReferences(error);
+          if (!references) {
+            reportFailure(error);
+            return;
+          }
+          const blocking = references.filter((ref) => !ref.detachable);
+          if (blocking.length) {
+            // The backend refused even a force delete: only removing those
+            // Elements frees the bytes, so no retry can succeed here.
+            showAssetInUseBlocked(blocking, t);
+            return;
+          }
+          if (!ownsScope()) return;
+          if (!(await confirmAssetForceDelete(references, t, forceDialogRef)))
+            return;
+          if (!ownsScope()) return;
+          try {
+            await deleteSourceAssetVersion(id, versionId, { force: true });
+          } catch (retryError) {
+            // The project may have changed while the dialog was open, and a
+            // late 409 still has to name the Element that holds the bytes
+            // rather than surface the backend's internal sentence.
+            const late = assetInUseReferences(retryError);
+            const lateBlocking = late?.filter((ref) => !ref.detachable) ?? [];
+            if (lateBlocking.length) {
+              showAssetInUseBlocked(lateBlocking, t);
+            } else {
+              reportFailure(retryError);
+            }
+            return;
+          }
+        }
+        message.success(t("assets.deleteSuccess"));
+        if (!ownsScope()) return;
+        // Refreshes are best-effort and settle independently. Stale
+        // "素材理解中" cards converge via the backend terminal subagent events,
+        // not via refreshSession directly.
+        try {
+          const refreshes = await Promise.allSettled([
+            pollOnce(id),
+            refreshTasks(id),
+            refreshSession(),
+          ]);
+          refreshes.forEach((result) => {
+            if (result.status === "rejected") console.error(result.reason);
+          });
+        } catch (error) {
+          console.error(error);
+        }
+        if (!ownsScope()) return;
+        // Clear the selection this delete invalidated — read the current URL
+        // rather than the render-time item, so a selection the user made while
+        // the request was in flight survives it.
+        if (liveSelectedAsset.current === versionId) {
+          selectItem(null);
+        }
+      },
+    });
   };
 
   // Hooks must run unconditionally, before the loading early-returns.
@@ -1085,13 +2088,27 @@ export default function AssetsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--color-bg-layout)]">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]/70 px-5 py-3 backdrop-blur">
-        <div>
-          <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
-            {t("assets.title")}
-          </h2>
-          <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
-            {t("assets.description")}
-          </p>
+        <div className="flex min-w-0 items-center gap-2.5">
+          {!sidebarOpen && (
+            <button
+              type="button"
+              data-sidebar-expand
+              title={t("plan.expandSidebar")}
+              aria-label={t("plan.expandSidebar")}
+              onClick={() => setSidebarOpen(true)}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)]/50 hover:text-[var(--color-accent)] dark:bg-[var(--color-bg-elevated)]"
+            >
+              <MenuUnfoldOutlined className="text-base" />
+            </button>
+          )}
+          <div>
+            <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
+              {t("assets.title")}
+            </h2>
+            <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
+              {t("assets.description")}
+            </p>
+          </div>
         </div>
         <div
           data-onboarding-id="assets-upload"
@@ -1133,7 +2150,7 @@ export default function AssetsPage() {
           <span className="leading-5">{uploadError}</span>
           <button
             type="button"
-            aria-label="关闭错误提示"
+            aria-label={t("assets.dismissError")}
             onClick={() => setUploadError(null)}
             className="shrink-0 font-semibold text-red-500 hover:text-red-700"
           >
@@ -1146,23 +2163,35 @@ export default function AssetsPage() {
         data-onboarding-id="assets-filters"
         className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-5 py-2.5"
       >
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1.5">
           {FILTERS.map((candidate) => (
             <button
               key={candidate.key}
               type="button"
               onClick={() => setFilter(candidate.key)}
-              className={`rounded-full px-3 py-1 text-xs transition ${
+              className={`rounded-full px-3.5 py-1 text-xs transition ${
                 filter === candidate.key
-                  ? "bg-[var(--color-accent)] text-white"
-                  : "border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]/50"
+                  ? "bg-[var(--color-bg-secondary)] font-medium text-[var(--color-text-primary)]"
+                  : "border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]/50 dark:bg-[var(--color-bg-primary)]"
               }`}
             >
               {t(candidate.labelKey)}
             </button>
           ))}
         </div>
-        <div className="ml-auto flex w-56 items-center rounded-lg border border-[var(--color-border)] bg-white px-2.5">
+        <div data-assets-origin className="ml-auto">
+          <Select
+            size="small"
+            className="w-[130px]"
+            value={origin}
+            onChange={(value) => setOrigin(value as OriginKey)}
+            options={ORIGINS.map((candidate) => ({
+              value: candidate.key,
+              label: t(candidate.labelKey),
+            }))}
+          />
+        </div>
+        <div className="flex w-56 items-center rounded-lg border border-[var(--color-border)] bg-white px-2.5 dark:bg-[var(--color-bg-primary)]">
           <Search className="h-3.5 w-3.5 text-[var(--color-text-tertiary)]" />
           <input
             value={search}
@@ -1179,7 +2208,7 @@ export default function AssetsPage() {
       {/* Size container for the grid/detail area; container queries cannot
           match the querying element itself. */}
       <div className="@container min-h-0 flex-1">
-        <main className="relative grid h-full min-h-0 grid-cols-[minmax(0,1fr)_340px] gap-4 overflow-hidden p-4 @max-[719px]:grid-cols-1">
+        <main className="relative grid h-full min-h-0 grid-cols-[minmax(0,1fr)_335px] gap-4 overflow-hidden p-4 @max-[719px]:grid-cols-1">
           <section
             data-onboarding-id="assets-grid"
             className="min-h-0 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3"
@@ -1204,17 +2233,28 @@ export default function AssetsPage() {
                             {group.countLabel}
                           </span>
                         )}
+                        {group.blueprint && (
+                          <button
+                            type="button"
+                            data-asset-group-blueprint={group.key}
+                            onClick={() => navigate(`/project/${id}`)}
+                            className="ml-auto rounded px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)]"
+                          >
+                            {t("assets.viewInBlueprint")}
+                          </button>
+                        )}
                       </div>
                     )}
                     {group.items.map((item) => {
-                      const Icon = mediaIcon(item.mediaKind);
+                      const display = displayedItem(item);
+                      const Icon = mediaIcon(display.mediaKind);
                       return (
                         <button
                           key={`${item.kind}:${item.id}`}
                           type="button"
                           data-creator-module="asset-card"
                           data-creator-module-id={item.id}
-                          onClick={() => selectItem(item)}
+                          onClick={() => selectItem(display)}
                           className={`group overflow-hidden rounded-xl border bg-[var(--color-bg-card)] text-left transition ${
                             selected?.id === item.id
                               ? "border-[var(--color-accent)] shadow-[0_0_0_1px_var(--color-accent)]"
@@ -1223,24 +2263,58 @@ export default function AssetsPage() {
                         >
                           <div className="relative flex h-32 items-center justify-center overflow-hidden bg-[var(--color-bg-secondary)]">
                             <AssetMediaPreview
-                              name={item.name}
-                              mediaType={item.mediaKind}
-                              previewUrl={item.previewUrl}
+                              name={display.name}
+                              mediaType={display.mediaKind}
+                              previewUrl={display.previewUrl}
                               state={
-                                item.previewUrl
+                                display.previewUrl
                                   ? "ready"
-                                  : item.kind === "visual"
+                                  : display.kind === "visual"
                                   ? "planned"
                                   : "unavailable"
                               }
                               mediaClassName="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
                               placeholderClassName="flex flex-col items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]"
                             />
-                            {!item.previewUrl && (
+                            {!display.previewUrl && (
                               <Icon className="pointer-events-none absolute h-6 w-6 -translate-y-3 text-[var(--color-text-tertiary)]" />
                             )}
+                            {item.versions && (
+                              <span
+                                data-asset-version-switch={item.id}
+                                className="absolute bottom-2 right-2 z-10 flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white backdrop-blur-md"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  className="cursor-pointer px-0.5 transition-transform hover:scale-125"
+                                  onClick={() => stepVersion(item, -1)}
+                                >
+                                  ‹
+                                </span>
+                                <span className="tabular-nums">
+                                  {(versionPick[item.id] ??
+                                    Math.max(
+                                      item.versions.findIndex(
+                                        (version) => version.selected,
+                                      ),
+                                      0,
+                                    )) + 1}
+                                  /{item.versions.length}
+                                </span>
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  className="cursor-pointer px-0.5 transition-transform hover:scale-125"
+                                  onClick={() => stepVersion(item, 1)}
+                                >
+                                  ›
+                                </span>
+                              </span>
+                            )}
                             <span className="absolute left-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                              {kindLabel(item, t)}
+                              {kindLabel(display, t)}
                             </span>
                             <div className="absolute right-2 top-2 flex flex-col items-end gap-1">
                               {item.variantState && (
@@ -1260,7 +2334,7 @@ export default function AssetsPage() {
                                     : t("assets.unselected")}
                                 </span>
                               )}
-                              {item.stale && (
+                              {display.stale && (
                                 <span className="rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
                                   {t("assets.stale")}
                                 </span>
@@ -1268,11 +2342,11 @@ export default function AssetsPage() {
                             </div>
                             {characterVoice(item) && (
                               <span
-                                title="已绑定专属音色"
+                                title={t("assets.voiceBoundTitle")}
                                 className="absolute bottom-2 right-2 flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-bold text-white"
                               >
                                 <Mic className="h-3 w-3" />
-                                音色
+                                {t("assets.voiceBadge")}
                               </span>
                             )}
                             {item.kind === "source" &&
@@ -1281,15 +2355,32 @@ export default function AssetsPage() {
                                   data-creator-memory-badge={item.id}
                                   className="absolute bottom-2 right-2 rounded bg-emerald-600/90 px-1.5 py-0.5 text-[10px] font-bold text-white"
                                 >
-                                  记忆已构建
+                                  {t("assets.memoryBuilt")}
                                 </span>
                               )}
+                            {item.kind === "source" && (
+                              <button
+                                type="button"
+                                data-asset-delete={item.id}
+                                title={t("assets.deleteTooltip")}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDeleteSourceAsset(
+                                    item.id,
+                                    display.name,
+                                  );
+                                }}
+                                className="absolute right-2 top-2 z-20 flex h-6 w-6 items-center justify-center rounded-full bg-red-500/80 text-white opacity-0 transition-opacity hover:bg-red-600 group-hover:opacity-100"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           </div>
                           <div className="p-3">
                             <h3 className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-                              {item.kind === "visual" && filter === "visual"
+                              {item.kind === "visual"
                                 ? item.cardName || item.name
-                                : item.name}
+                                : display.name}
                             </h3>
                             <p className="mt-1 line-clamp-2 min-h-8 text-[11px] leading-4 text-[var(--color-text-secondary)]">
                               {item.description}
@@ -1309,6 +2400,11 @@ export default function AssetsPage() {
                   </Fragment>
                 ))}
               </div>
+            ) : allItems.length === 0 &&
+              !search.trim() &&
+              filter === "all" &&
+              origin === "any" ? (
+              <WorkspaceEmptyState projectId={id} area="assets" />
             ) : (
               <div className="flex h-full min-h-64 flex-col items-center justify-center text-center text-[var(--color-text-tertiary)]">
                 <Paperclip className="mb-3 h-8 w-8 opacity-50" />
@@ -1340,7 +2436,7 @@ export default function AssetsPage() {
                       className={
                         selectedOriginalGate
                           ? ""
-                          : "flex aspect-video items-center justify-center overflow-hidden bg-black"
+                          : "m-3 mb-0 flex aspect-video items-center justify-center overflow-hidden rounded-lg bg-black"
                       }
                     >
                       {selectedOriginalGate ? (
@@ -1386,31 +2482,53 @@ export default function AssetsPage() {
                           {characterVoice(selected) && (
                             <span className="flex items-center gap-1 rounded bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-accent)]">
                               <Mic className="h-3 w-3" />
-                              已绑定音色
+                              {t("assets.voiceBound")}
                             </span>
                           )}
                         </div>
                         <h3 className="mt-2 text-base font-semibold text-[var(--color-text-primary)]">
                           {selected.name}
                         </h3>
-                        <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-[var(--color-text-secondary)]">
+                        <p
+                          data-creator-field={`${selected.ref}/description`}
+                          data-creator-field-label={selected.name}
+                          className="mt-1 select-text whitespace-pre-wrap text-xs leading-5 text-[var(--color-text-secondary)]"
+                        >
                           {selected.description}
                         </p>
                       </div>
-                      <dl className="space-y-2 text-xs">
+                      {reviewedVisualField && (
+                        <section
+                          data-creator-path={reviewedVisualField.pointer}
+                          className="space-y-2 rounded-lg border border-[var(--color-border)] p-3"
+                        >
+                          <h4 className="text-xs font-semibold">
+                            {reviewedVisualField.label}
+                          </h4>
+                          <p
+                            data-creator-field={creatorFieldForPointer(
+                              reviewedVisualField.pointer,
+                            )}
+                            data-creator-path={reviewedVisualField.pointer}
+                            data-creator-field-label={reviewedVisualField.label}
+                            className="select-text whitespace-pre-wrap text-xs leading-5"
+                          >
+                            {reviewedVisualField.value || "—"}
+                          </p>
+                          <InlineReviewDiff
+                            pointer={reviewedVisualField.pointer}
+                          />
+                        </section>
+                      )}
+                      {/* 字段行 (design 84:81503): 时长 / 创建时间. */}
+                      <div className="space-y-1.5">
                         {[
-                          [t("assets.ref"), selected.ref],
-                          [
-                            t("assets.media"),
-                            selected.mediaType || selected.mediaKind,
-                          ],
                           [
                             t("common.duration"),
                             selected.durationSeconds == null
                               ? "—"
                               : `${selected.durationSeconds.toFixed(2)}s`,
                           ],
-                          ["Owner", selected.ownerRef || "—"],
                           [
                             t("assets.createdTime"),
                             selected.createdAt
@@ -1419,21 +2537,20 @@ export default function AssetsPage() {
                                 )
                               : "—",
                           ],
-                          ["Checksum", selected.checksum || "—"],
                         ].map(([label, value]) => (
                           <div
                             key={label}
-                            className="grid grid-cols-[64px_minmax(0,1fr)] gap-2"
+                            className="flex items-center justify-between gap-2 rounded-lg bg-[var(--color-bg-secondary)]/60 px-3 py-2 text-xs"
                           >
-                            <dt className="text-[var(--color-text-tertiary)]">
+                            <span className="shrink-0 text-[var(--color-text-tertiary)]">
                               {label}
-                            </dt>
-                            <dd className="break-all font-mono text-[11px] text-[var(--color-text-secondary)]">
+                            </span>
+                            <span className="truncate text-[var(--color-text-primary)]">
                               {value}
-                            </dd>
+                            </span>
                           </div>
                         ))}
-                      </dl>
+                      </div>
                       {selected.kind === "source" &&
                         selected.mediaKind === "document" && (
                           <DocumentUnderstanding
@@ -1506,8 +2623,41 @@ export default function AssetsPage() {
                         );
                       })()}
                       {(() => {
+                        const isCharacter =
+                          selected.kind === "visual" &&
+                          (selected.raw as VisualEntityDocument).kind ===
+                            "character" &&
+                          !selected.ref.startsWith("lineup:");
                         const voice = characterVoice(selected);
-                        if (!voice) return null;
+                        if (!voice) {
+                          if (!isCharacter) return null;
+                          // 角色还没有专属音色：提供生成入口（音色注册只能由
+                          // 创作助手的 create_character_voice 工具完成）。
+                          return (
+                            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
+                              <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+                                <Mic className="h-3.5 w-3.5" />
+                                {t("assets.voiceTitle")}
+                              </div>
+                              <p className="text-xs leading-[1.6] text-[var(--color-text-tertiary)]">
+                                {t("assets.voiceEmptyHint")}
+                              </p>
+                              <div className="mt-2.5 flex justify-end">
+                                <RegeneratePill
+                                  field={`voice:${
+                                    selected.entityId ?? selected.id
+                                  }`}
+                                  label={t("assets.voiceGenerate")}
+                                  onClick={() =>
+                                    setVoiceModalEntity(
+                                      selected.raw as VisualEntityDocument,
+                                    )
+                                  }
+                                />
+                              </div>
+                            </div>
+                          );
+                        }
                         const sampleUrl = voice.sample_source_version_id
                           ? getAssetVersionMediaUrl(
                               voice.sample_source_version_id,
@@ -1517,14 +2667,22 @@ export default function AssetsPage() {
                           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
                             <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-secondary)]">
                               <Mic className="h-3.5 w-3.5" />
-                              专属音色
+                              {t("assets.voiceTitle")}
                             </div>
                             <dl className="space-y-1.5 text-xs">
                               {[
-                                ["音色名", voice.preferred_name || "—"],
-                                ["合成模型", voice.target_model],
                                 [
-                                  "创建时间",
+                                  t("assets.voiceName"),
+                                  voice.preferred_name || "—",
+                                ],
+                                [t("assets.voiceModel"), voice.target_model],
+                                [
+                                  t("assets.voicePromptLabel"),
+                                  voice.voice_prompt ||
+                                    t("assets.voicePromptMissing"),
+                                ],
+                                [
+                                  t("assets.createdTime"),
                                   voice.created_at
                                     ? new Date(voice.created_at).toLocaleString(
                                         "zh-CN",
@@ -1545,43 +2703,33 @@ export default function AssetsPage() {
                                 </div>
                               ))}
                             </dl>
-                            {sampleUrl && (
+                            {sampleUrl ? (
                               <audio
                                 src={sampleUrl}
                                 controls
                                 className="mt-2 h-8 w-full"
                               />
+                            ) : (
+                              <p className="mt-2 rounded bg-[var(--color-bg-primary)] px-2 py-1.5 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+                                {t("assets.voiceSampleMissing")}
+                              </p>
                             )}
-                            <p className="mt-2 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
-                              在对话中要求重新设计或复刻可替换该音色；后续该角色的台词配音会自动沿用。
-                            </p>
+                            <div className="mt-2.5 flex justify-end">
+                              <RegeneratePill
+                                field={`voice:${
+                                  selected.entityId ?? selected.id
+                                }`}
+                                label={t("assets.voiceRegenerate")}
+                                onClick={() =>
+                                  setVoiceModalEntity(
+                                    selected.raw as VisualEntityDocument,
+                                  )
+                                }
+                              />
+                            </div>
                           </div>
                         );
                       })()}
-                      {Object.keys(selected.metadata).length > 0 && (
-                        <details className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3 text-xs">
-                          <summary className="cursor-pointer font-semibold text-[var(--color-text-secondary)]">
-                            {t("assets.metadata")}
-                          </summary>
-                          <dl className="mt-2 space-y-1.5">
-                            {Object.entries(selected.metadata).map(
-                              ([key, value]) => (
-                                <div
-                                  key={key}
-                                  className="grid grid-cols-[100px_minmax(0,1fr)] gap-2"
-                                >
-                                  <dt className="truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
-                                    {key}
-                                  </dt>
-                                  <dd className="break-all text-[11px] text-[var(--color-text-secondary)]">
-                                    {displayValue(value)}
-                                  </dd>
-                                </div>
-                              ),
-                            )}
-                          </dl>
-                        </details>
-                      )}
                       {(() => {
                         if (!project) return null;
                         const promptTarget = generationPromptTarget(
@@ -1594,16 +2742,90 @@ export default function AssetsPage() {
                             key={promptTarget.pointer}
                             target={promptTarget}
                             saving={patching}
-                            onSave={async (target, next) => {
+                            regenerating={nodeGenerating(
+                              tasks,
+                              dispatchNodeIdForPrompt(promptTarget.pointer),
+                            )}
+                            regenerateLabel={
+                              selected.mediaKind === "video"
+                                ? t("r2v.regenerateVideo")
+                                : selected.mediaKind === "audio"
+                                ? t("assets.regenerateAudio")
+                                : t("r2v.regenerateImage")
+                            }
+                            onRegenerate={(() => {
+                              const nodeId = dispatchNodeIdForPrompt(
+                                promptTarget.pointer,
+                              );
+                              if (!nodeId) return undefined;
+                              return () => {
+                                void dispatchWorkGraphNode(id, nodeId)
+                                  .then((result) => {
+                                    if (result.dispatched) {
+                                      message.success(t("r2v.regenQueued"));
+                                    } else if (result.status === "running") {
+                                      message.info(t("r2v.regenRunning"));
+                                    } else {
+                                      message.info(t("r2v.regenUpToDate"));
+                                    }
+                                    void refreshTasks(id);
+                                    void pollOnce(id);
+                                  })
+                                  .catch((error) =>
+                                    message.error((error as Error).message),
+                                  );
+                              };
+                            })()}
+                            onSave={async (target, next, addedIds) => {
                               try {
-                                await patchProject(id, [
-                                  {
+                                const operations: Parameters<
+                                  typeof patchProject
+                                >[1] = [];
+                                if (next !== target.value) {
+                                  operations.push({
                                     op: "replace",
                                     path: target.pointer,
                                     before: target.value,
                                     value: next,
-                                  },
-                                ]);
+                                  });
+                                }
+                                const binding = target.referenceBinding;
+                                if (binding && addedIds.length > 0 && project) {
+                                  const addedAssets = addedIds.filter(
+                                    (versionId) =>
+                                      project.assets.source_versions_by_id[
+                                        versionId
+                                      ],
+                                  );
+                                  const addedArtifacts = addedIds.filter(
+                                    (versionId) =>
+                                      !addedAssets.includes(versionId),
+                                  );
+                                  if (addedAssets.length) {
+                                    operations.push({
+                                      op: "replace",
+                                      path: `${binding.base}/reference_asset_version_ids`,
+                                      before: binding.assetIds,
+                                      value: [
+                                        ...binding.assetIds,
+                                        ...addedAssets,
+                                      ],
+                                    });
+                                  }
+                                  if (addedArtifacts.length) {
+                                    operations.push({
+                                      op: "replace",
+                                      path: `${binding.base}/reference_artifact_version_ids`,
+                                      before: binding.artifactIds,
+                                      value: [
+                                        ...binding.artifactIds,
+                                        ...addedArtifacts,
+                                      ],
+                                    });
+                                  }
+                                }
+                                if (!operations.length) return;
+                                await patchProject(id, operations);
                                 message.success(t("assets.promptSaved"));
                               } catch (error) {
                                 message.error(
@@ -1632,52 +2854,6 @@ export default function AssetsPage() {
                             {t("assets.enterR2VWorkbench")}
                           </Button>
                         )}
-                      <div className="flex gap-2">
-                        {selected.previewUrl && (
-                          <Button
-                            icon={<Download className="h-3.5 w-3.5" />}
-                            onClick={() => {
-                              const filename = downloadName(
-                                selected.name,
-                                selected.mediaType,
-                              );
-                              fetch(selected.previewUrl!)
-                                .then((res) => {
-                                  if (!res.ok)
-                                    throw new Error(
-                                      t("assets.downloadFailed", {
-                                        status: res.status,
-                                      }),
-                                    );
-                                  return res.blob();
-                                })
-                                .then((blob) => {
-                                  const url = URL.createObjectURL(blob);
-                                  const a = document.createElement("a");
-                                  a.href = url;
-                                  a.download = filename;
-                                  a.click();
-                                  URL.revokeObjectURL(url);
-                                })
-                                .catch((error) => {
-                                  message.error(
-                                    error instanceof Error
-                                      ? error.message
-                                      : t("assets.downloadFailedGeneric"),
-                                  );
-                                });
-                            }}
-                          >
-                            {t("common.download")}
-                          </Button>
-                        )}
-                        <Button
-                          className="flex-1"
-                          onClick={() => selectItem(null)}
-                        >
-                          {t("common.close")}
-                        </Button>
-                      </div>
                     </div>
                   </div>
                 ) : (
@@ -1704,6 +2880,13 @@ export default function AssetsPage() {
           })()}
         </main>
       </div>
+
+      <VoiceGenerationModal
+        open={voiceModalEntity !== null}
+        projectId={id}
+        entity={voiceModalEntity}
+        onClose={() => setVoiceModalEntity(null)}
+      />
 
       <Modal
         title={t("assets.addSourceAsset")}

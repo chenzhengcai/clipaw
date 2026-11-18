@@ -26,13 +26,52 @@ export interface ResolvedArtifactOutput {
 
 export function selectPrimaryTimeline(
   project: ProjectDocument | null | undefined,
+  activeTimelineId?: string | null,
 ): TimelineDocument | null {
   if (!project) return null;
+  if (activeTimelineId && project.timelines.items[activeTimelineId]) {
+    return project.timelines.items[activeTimelineId];
+  }
   const orderedId = project.timelines.order.find(
-    (id) => project.timelines.items[id],
+    (id) => project.timelines.items[id] && !id.startsWith("snapshot:"),
   );
   if (orderedId) return project.timelines.items[orderedId];
   return Object.values(project.timelines.items)[0] ?? null;
+}
+
+export function selectTimelineById(
+  project: ProjectDocument | null | undefined,
+  timelineId: string | null | undefined,
+): TimelineDocument | null {
+  if (!project || !timelineId) return null;
+  return project.timelines.items[timelineId] ?? null;
+}
+
+export type NarrativeShape = "single" | "linear";
+
+/**
+ * Live narrative timelines in order; `snapshot:*` frozen history excluded.
+ * Every "how many episodes / which timeline is active" decision must go
+ * through this filter instead of reading `timelines.order` directly.
+ */
+export function selectLiveTimelineIds(
+  project: ProjectDocument | null | undefined,
+): string[] {
+  if (!project) return [];
+  return project.timelines.order.filter(
+    (id) => project.timelines.items[id] && !id.startsWith("snapshot:"),
+  );
+}
+
+/**
+ * The blueprint's only fork point, derived purely from data (plan §4.5):
+ * several timelines → linear episode list; otherwise the single-node
+ * production board.
+ */
+export function selectNarrativeShape(
+  project: ProjectDocument | null | undefined,
+): NarrativeShape {
+  return selectLiveTimelineIds(project).length > 1 ? "linear" : "single";
 }
 
 export function timelineEndTick(
@@ -182,6 +221,33 @@ export function overlayContentKind(
   if (kind === "motion") return "motion";
   if (kind === "media") return "media";
   return creation.text?.trim() ? "copy" : "motion";
+}
+
+/**
+ * Pet footage marks, mirroring `models.is_pet_content_type`: the launch form
+ * writes `pet_video` while the composer's bubble styling spells it `pets`, so
+ * classification accepts both and stays in step with the backend predicate.
+ */
+const PET_CONTENT_TYPES = new Set(["pets", "pet_video"]);
+
+export function isPetContent(contentType?: string | null): boolean {
+  return contentType !== undefined && PET_CONTENT_TYPES.has(contentType);
+}
+
+/**
+ * Whether an overlay is a subtitle for bulk subtitle work — the UI mirror of
+ * `models.is_subtitle_overlay`, which the backend toggle and the v9->v10
+ * caption_role stamping both use.  A pet-OS bubble is deliberately not a
+ * subtitle: the prompts leave its caption_role empty and give it a dedicated
+ * layout, so the toolbar must not hide or restamp it.
+ */
+export function isSubtitleOverlay(
+  creation: OverlayCreationDocument,
+  contentType?: string | null,
+): boolean {
+  if (!creation.text?.trim()) return false;
+  if (creation.caption_role) return true;
+  return !(isPetContent(contentType) && creation.vibe !== "summary");
 }
 
 export function classifyElementTrack(

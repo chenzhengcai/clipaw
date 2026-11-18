@@ -33,9 +33,13 @@ import httpx
 
 import os
 
+from pathlib import Path
+
 from models import config as model_config
 from models.media_transport import (
+    downscale_image_to_budget,
     read_reference_media,
+    reference_media_data_url,
     upload_reference_bytes_to_dashscope_temp,
     validate_reference_image_bytes,
 )
@@ -82,6 +86,12 @@ POLL_REQUEST_TIMEOUT = 30
 SUBMIT_REQUEST_TIMEOUT = 60
 
 _TASK_TERMINAL_FAILED = ("FAILED", "CANCELED", "UNKNOWN")
+
+# Bailian inlines a Base64 reference image only when the original file is
+# under 7MB: Base64 inflates the payload ~33% against the 10MB per-image
+# cap, and a 7-10MB image must travel as a public URL instead. Token Plan
+# has no upload route to mint that URL, so this is the inline ceiling.
+TOKEN_PLAN_INLINE_IMAGE_MAX_BYTES = 7 * 1024 * 1024
 
 
 class DashScopeImageModel(BaseImageModel):
@@ -150,6 +160,16 @@ class DashScopeImageModel(BaseImageModel):
             _mask_key(api_key),
             base_url,
         )
+        # qwen-image3 multi-reference identity boards and storyboards routinely
+        # take several minutes on the synchronous multimodal endpoint.  A
+        # 240-second legacy default caused the caller to abandon a possibly
+        # billed render and submit another one.  Other DashScope image families
+        # keep the 480s baseline while qwen-image3 gets a production-safe wait.
+        default_timeout = (
+            900
+            if model_name.strip().casefold().startswith("qwen-image-3")
+            else 480
+        )
         return cls(
             model_name=model_name,
             api_key=api_key,
@@ -169,9 +189,12 @@ class DashScopeImageModel(BaseImageModel):
                 int(
                     os.environ.get(
                         "DASHSCOPE_IMAGE_TIMEOUT",
-                        os.environ.get("IMAGE_TIMEOUT", "480"),
+                        os.environ.get(
+                            "IMAGE_TIMEOUT",
+                            str(default_timeout),
+                        ),
                     )
-                    or 480,
+                    or default_timeout,
                 ),
             ),
             concurrency=_configured_int(
@@ -212,18 +235,24 @@ class DashScopeImageModel(BaseImageModel):
         raw_url: str,
         *,
         model_name: str | None = None,
+        mode: str = "generate",
     ) -> str | None:
         """Return a provider-resolvable URL for one reference image.
 
         Public HTTP(S) URLs pass through; local/generated media is uploaded
         to DashScope model-bound temporary storage (``oss://`` + resolve
-        header). Corrupt local references return ``None`` so a stale project
-        file cannot fail the whole request.
+        header), except on a Token Plan endpoint: it has no upload route and
+        takes the bytes inline as a Base64 data URL instead. Corrupt local
+        references return ``None`` so a stale project file cannot fail the
+        whole request.
 
         ``model_name`` must be the model that will *consume* the URL: a
         temporary upload is bound to the model its policy was issued for
         (see :mod:`models.media_transport`), so translate uploads bind to
         ``qwen-mt-image`` rather than the generation model.
+
+        ``mode`` decides whether an oversized local reference may be shrunk;
+        see :meth:`_fit_token_plan_reference`.
         """
 
         url = raw_url.strip()
@@ -236,12 +265,81 @@ class DashScopeImageModel(BaseImageModel):
             validate_reference_image_bytes(media_bytes)
         except ValueError:
             return None
+        if self._is_token_plan_endpoint():
+            # A Token Plan key (sk-sp-) has no temporary-upload route: the
+            # public dashscope.aliyuncs.com/api/v1/uploads answers it 401
+            # and the token-plan host serves no /api/v1/uploads at all
+            # (both measured). Its multimodal-generation endpoint accepts a
+            # Base64 data URL, but only under the 7MB inline ceiling above.
+            if len(media_bytes) >= TOKEN_PLAN_INLINE_IMAGE_MAX_BYTES:
+                media_bytes, filename = self._fit_token_plan_reference(
+                    media_bytes,
+                    filename,
+                    mode=mode,
+                    model_name=model_name,
+                )
+            return reference_media_data_url(media_bytes, filename)
         return await upload_reference_bytes_to_dashscope_temp(
             media_bytes,
             filename,
             api_key=self.api_key,
             model_name=model_name or self.model_name,
         )
+
+    def _fit_token_plan_reference(
+        self,
+        media_bytes: bytes,
+        filename: str,
+        *,
+        mode: str,
+        model_name: str | None,
+    ) -> tuple[bytes, str]:
+        """Shrink an oversized local reference, or refuse where pixels matter.
+
+        An ``edit`` or ``translate`` reference *is* the canvas the
+        instruction operates on, so it is never silently downscaled: those
+        pixels are what the instruction is told to keep. A ``generate``
+        reference only has to carry subject and style, so shrinking it beats
+        failing a request the provider could have served.
+
+        The re-encoded payload is JPEG whatever the source format was, so the
+        filename follows it: ``reference_media_data_url`` takes the MIME type
+        from the suffix first and would otherwise label JPEG bytes as PNG.
+        """
+        effective_model = model_name or self.model_name
+        oversized = (
+            "Token Plan 图像端点没有本地文件上传通道，参考图只能以 "
+            "Base64 内联且原图需小于 7MB（当前约 "
+            f"{len(media_bytes) / (1024 * 1024):.1f}MB）。"
+        )
+        if mode != "generate":
+            raise ModelError(
+                oversized + f"mode={mode} 的参考图就是指令要操作的画面，不会被自动"
+                "降采样。请压缩到 7MB 以内、改用公网图片 URL，或把图像"
+                "模型切到百炼直连端点后再用本地参考图。",
+                model_name=effective_model,
+                retryable=False,
+            )
+        downscaled = downscale_image_to_budget(
+            media_bytes,
+            TOKEN_PLAN_INLINE_IMAGE_MAX_BYTES,
+            label=filename,
+        )
+        if downscaled is None:
+            # Permanent: the bytes cannot shrink below the inline ceiling,
+            # so retrying only burns backoff on a doomed request.
+            raise ModelError(
+                oversized + "自动降采样后仍然超限。请压缩到 7MB 以内、改用公网图片 "
+                "URL，或把图像模型切到百炼直连端点后再用本地参考图。",
+                model_name=effective_model,
+                retryable=False,
+            )
+        logger.info(
+            "Downscaled an oversized Token Plan image reference | "
+            f"filename={filename}, before={len(media_bytes)}, "
+            f"after={len(downscaled)}",
+        )
+        return downscaled, f"{Path(filename).stem}.jpg"
 
     async def _request(
         self,
@@ -424,6 +522,7 @@ class DashScopeImageModel(BaseImageModel):
                 )
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
+    # Keep the provider body interface compatible across operation modes.
     async def _build_body(
         self,
         prompt: str,
@@ -437,21 +536,19 @@ class DashScopeImageModel(BaseImageModel):
         # with references it becomes an image-editing request on the same
         # multimodal-generation endpoint.
         content: list[dict] = []
-        for raw_url in dict.fromkeys(clean_reference_urls):
-            public_url = await self._public_reference_url(raw_url)
+        for raw_url in clean_reference_urls:
+            public_url = await self._public_reference_url(
+                raw_url,
+                mode=mode,
+            )
             if public_url is None:
-                if mode == "edit":
-                    # An edit was authorized: silently dropping its input
-                    # would bill a text-to-image render of something else.
-                    raise ModelError(
-                        "Image edit reference cannot be read or is not a "
-                        f"decodable image: {raw_url[:120]}",
-                        model_name=self.model_name,
-                    )
-                # A stale or corrupt project reference must not fail the
-                # whole generation. Continue with the remaining references,
-                # or as text-to-image when none are usable.
-                continue
+                # Dropping even a middle input changes every later 图N. A
+                # generate call with references has the same identity
+                # obligation as edit; neither may degrade to text-to-image.
+                raise ModelError(
+                    "Image reference cannot be read or is not a decodable image",
+                    model_name=self.model_name,
+                )
             content.append({"image": public_url})
         content.append({"text": prompt})
 
@@ -474,7 +571,7 @@ class DashScopeImageModel(BaseImageModel):
         }
 
     def _is_token_plan_endpoint(self) -> bool:
-        return "token-plan" in self.base_url.lower()
+        return model_config.is_token_plan_endpoint(self.base_url)
 
     async def _decode(self, data: dict | list) -> dict:
         output = data.get("output") if isinstance(data, dict) else None
@@ -549,6 +646,7 @@ class DashScopeImageModel(BaseImageModel):
         public_url = await self._public_reference_url(
             image_url,
             model_name=translate_model,
+            mode="translate",
         )
         if public_url is None:
             raise ModelError(

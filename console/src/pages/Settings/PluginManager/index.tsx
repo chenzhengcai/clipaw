@@ -1,5 +1,8 @@
+import { useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Button, Tabs } from "antd";
+import type { InstallPluginResult } from "@/api/modules/plugin";
+import { Badge, Button, Tabs } from "antd";
+import { useSearchParams } from "react-router-dom";
 import { ExternalLink, Plus } from "lucide-react";
 import { MarketplaceHeader } from "@/pages/Market/components/MarketplaceHeader";
 import { usePluginManager } from "./hooks/usePluginManager";
@@ -9,38 +12,128 @@ import { InstalledPluginList } from "./components/InstalledPluginList";
 import { OfficialPluginList } from "./components/OfficialPluginList";
 import { MarketPluginList } from "./components/MarketPluginList";
 import styles from "./index.module.less";
+import { reloadFrontendPlugin } from "@/plugins/usePluginLoader";
+import { useAppMessage } from "@/hooks/useAppMessage";
+import { useAgentStore } from "@/stores/agentStore";
+import { resumePendingPluginInstalls } from "./dependencyUpgrade";
 
 export default function PluginManagerPage() {
   const { t } = useTranslation();
+  const { message } = useAppMessage();
+  const selectedAgent = useAgentStore((state) => state.selectedAgent);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const viewParam = searchParams.get("view");
+  const targetPlugin = searchParams.get("plugin") ?? "";
+  const activeTab =
+    viewParam === "official" || viewParam === "market"
+      ? viewParam
+      : "installed";
 
-  const { plugins, loading, refresh, uninstallingId, handleUninstall } =
-    usePluginManager();
+  const {
+    plugins,
+    loading,
+    refresh,
+    refreshUpdates,
+    uninstallingId,
+    handleUninstall,
+    enablingId,
+    enableOne,
+    repairOne,
+    disableOne,
+    updates,
+    updatesLoading,
+    updatingId,
+    updatingAll,
+    updateOne,
+    updateAll,
+  } = usePluginManager();
 
-  const installModal = useInstallModal(refresh);
+  const handleInstalled = useCallback(
+    async (result: InstallPluginResult) => {
+      try {
+        await reloadFrontendPlugin(result.id);
+      } finally {
+        await refresh();
+      }
+    },
+    [refresh],
+  );
+
+  useEffect(
+    () =>
+      resumePendingPluginInstalls(
+        t,
+        async (result) => {
+          await handleInstalled(result);
+          message.success(
+            `${t("pluginManager.installSuccess")}: ${result.name}`,
+          );
+        },
+        (error) => message.error(error.message),
+      ),
+    [handleInstalled, message, selectedAgent, t],
+  );
+
+  const installModal = useInstallModal(handleInstalled);
 
   const tabItems = [
     {
       key: "installed",
-      label: t("pluginManager.installed"),
+      label: (
+        <span>
+          {t("pluginManager.installed")}
+          {updates.size > 0 && (
+            <Badge count={updates.size} style={{ marginLeft: 8 }} />
+          )}
+        </span>
+      ),
       children: (
         <InstalledPluginList
+          key={targetPlugin}
+          initialSearch={targetPlugin}
           plugins={plugins}
           loading={loading}
           uninstallingId={uninstallingId}
-          onRefresh={refresh}
+          onRefresh={refreshUpdates}
           onUninstall={handleUninstall}
+          enablingId={enablingId}
+          onEnable={enableOne}
+          onRepair={repairOne}
+          onDisable={disableOne}
+          updates={updates}
+          updatesLoading={updatesLoading}
+          updatingId={updatingId}
+          updatingAll={updatingAll}
+          onUpdate={updateOne}
+          onUpdateAll={updateAll}
         />
       ),
     },
     {
       key: "official",
       label: t("pluginManager.officialTitle"),
-      children: <OfficialPluginList onInstalled={refresh} />,
+      children: (
+        <OfficialPluginList
+          key={targetPlugin}
+          initialSearch={targetPlugin}
+          onInstalled={handleInstalled}
+          installedPlugins={plugins ?? []}
+          uninstallingId={uninstallingId}
+          onUninstall={handleUninstall}
+        />
+      ),
     },
     {
       key: "market",
       label: t("pluginManager.marketTitle"),
-      children: <MarketPluginList onInstalled={refresh} />,
+      children: (
+        <MarketPluginList
+          key={targetPlugin}
+          initialSearch={targetPlugin}
+          onInstalled={handleInstalled}
+          installedPlugins={plugins ?? []}
+        />
+      ),
     },
   ];
 
@@ -70,7 +163,17 @@ export default function PluginManagerPage() {
       />
 
       <div className={styles.content}>
-        <Tabs items={tabItems} className={styles.tabs} />
+        <Tabs
+          activeKey={activeTab}
+          onChange={(key) => {
+            const next = new URLSearchParams(searchParams);
+            if (key === "installed") next.delete("view");
+            else next.set("view", key);
+            setSearchParams(next, { replace: true });
+          }}
+          items={tabItems}
+          className={styles.tabs}
+        />
       </div>
 
       <InstallPluginModal {...installModal} />

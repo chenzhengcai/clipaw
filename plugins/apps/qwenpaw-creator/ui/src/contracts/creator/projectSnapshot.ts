@@ -6,13 +6,28 @@ export interface ProjectEntityCollection<T> {
   order: string[];
 }
 
+/** Persisted subtitle-bar overrides (snake_case mirror of the API model). */
+export interface SubtitleStyleDocument extends ProjectJsonRecord {
+  color?: string | null;
+  font_scale?: number | null;
+  stroke_scale?: number | null;
+  background_opacity?: number | null;
+  /** Typeface id (see backend overlay._SUBTITLE_FONT_FAMILIES); null = auto. */
+  font_family?: string | null;
+}
+
 export interface ProjectSettingsDocument extends ProjectJsonRecord {
+  production_stage?: "script" | "media";
+  script_approval_fingerprint?: string | null;
   aspect_ratio: string;
   resolution: string;
   platform: string;
   language: string;
   target_duration_seconds: number | null;
   content_type: string | null;
+  subtitle_policy?: "auto" | "on" | "off";
+  subtitle_template?: string | null;
+  subtitle_style?: SubtitleStyleDocument | null;
   execution_preauthorization?: ProjectJsonRecord | null;
 }
 
@@ -129,6 +144,7 @@ export interface CharacterVoiceDocument extends ProjectJsonRecord {
   target_model: string;
   preferred_name: string;
   sample_source_version_id: string | null;
+  voice_prompt?: string;
   enrollment_key: string;
   created_at: string;
 }
@@ -191,15 +207,6 @@ export interface GenerationRecipeDocument extends ProjectJsonRecord {
   candidate_count: number;
 }
 
-export interface ShotDocument extends ProjectJsonRecord {
-  shot_id: string;
-  description: string;
-  camera: string | null;
-  framing: string | null;
-  duration_seconds: number | null;
-  dialogue?: string;
-}
-
 export type VideoGenerationMode = "r2v" | "t2v" | "i2v" | "s2v";
 
 export interface R2VCreationDocument extends ProjectJsonRecord {
@@ -212,12 +219,18 @@ export interface R2VCreationDocument extends ProjectJsonRecord {
   prop_refs: string[];
   visual_variant_refs: Record<string, string>;
   cast_lineup_refs?: string[];
-  shots: ProjectEntityCollection<ShotDocument>;
   recipe: GenerationRecipeDocument | null;
   storyboard_prompt: string;
   storyboard_reference_version_ids: string[];
   video_prompt: string;
   video_reference_version_ids: string[];
+  /** Server-owned provenance. Presentation consumes the prompt-sync API. */
+  prompt_sync?: {
+    contract_version: 2;
+    plan_fingerprint: string;
+    storyboard_prompt_fingerprint: string;
+    video_prompt_fingerprint: string;
+  } | null;
 }
 
 export interface T2VCreationDocument extends ProjectJsonRecord {
@@ -277,6 +290,16 @@ export interface MotionGraphicDocument extends ProjectJsonRecord {
   intensity?: number;
 }
 
+export type CaptionRole =
+  | "dialogue"
+  | "narration"
+  | "opening_title"
+  | "opening_credit"
+  | "ending_credit"
+  | "location"
+  | "chapter"
+  | "interview_summary";
+
 export interface OverlayCreationDocument extends ProjectJsonRecord {
   type: "overlay";
   // The overlay role derives from data: non-empty text = caption card;
@@ -284,6 +307,7 @@ export interface OverlayCreationDocument extends ProjectJsonRecord {
   // reference their payload through the element's render_source.
   text: string;
   vibe: string;
+  caption_role?: CaptionRole | null;
   prompt: string;
   reference_version_ids: string[];
   motion?: MotionGraphicDocument | null;
@@ -425,13 +449,22 @@ export interface EditPlanDocument extends ProjectJsonRecord {
 
 export interface TimelineDocument extends ProjectJsonRecord {
   timeline_id: string;
+  name: string;
+  description: string;
   ticks_per_second: number;
+  /** Narrative-node display title (schema v9; absent on older snapshots). */
+  title?: string;
+  /** Narrative-node synopsis (schema v9; absent on older snapshots). */
+  synopsis?: string;
+  /** Planned duration in seconds (schema v9; absent on older snapshots). */
+  planned_duration_seconds?: number | null;
+  color_grade?: string;
   edit_plan?: EditPlanDocument | null;
   elements_by_id: Record<string, TimelineElementDocument>;
 }
 
 export interface ProjectDocument extends ProjectJsonRecord {
-  schema_version: 4;
+  schema_version: number;
   project_id: string;
   generation: number;
   created_at: string;
@@ -498,12 +531,18 @@ export interface R2VReferenceOrderItem {
   versionId: string;
   kind: "storyboard" | "source" | "artifact";
   name: string;
+  available?: boolean;
 }
 
 export interface R2VReferenceOrderResponse {
   elementId: string;
   storyboardSelected: boolean;
   references: R2VReferenceOrderItem[];
+  stage?: "storyboard" | "video";
+  ready?: boolean;
+  referenceLimit?: number | null;
+  invalidMarkerIndices?: number[];
+  budgetDroppedVersionIds?: string[];
 }
 
 export interface ProjectPatchResponse {

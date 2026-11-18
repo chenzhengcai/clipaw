@@ -9,12 +9,12 @@
 
 .filterTag {
   flex-shrink: 0;
-  min-height: 30px;
+  min-height: 32px;
   padding: 4px 12px;
-  border: 1px solid var(--color-border-secondary, #eae8e7);
+  border: 1px solid var(--app-border);
   border-radius: 16px;
-  background: var(--color-bg-container, #ffffff);
-  color: var(--color-text-secondary, rgba(20, 20, 19, 0.58));
+  background: var(--app-surface);
+  color: var(--app-text-secondary);
   font: inherit;
   font-size: 13px;
   line-height: 20px;
@@ -25,20 +25,20 @@
     background-color 0.16s ease;
 
   &:hover {
-    border-color: var(--color-border, #d8d4cf);
-    color: var(--color-text, rgba(20, 20, 19, 0.88));
+    border-color: var(--app-border-hover);
+    color: var(--app-text);
   }
 
   &:focus-visible {
-    outline: 2px solid var(--color-primary, #ff7a00);
+    outline: 2px solid var(--app-accent);
     outline-offset: 1px;
   }
 }
 
 .filterTagActive {
-  border-color: var(--color-fill-secondary, #e8e6e3);
-  background: var(--color-fill-secondary, #e8e6e3);
-  color: var(--color-text, rgba(20, 20, 19, 0.88));
+  border-color: var(--app-accent-border);
+  background: var(--app-accent-soft);
+  color: var(--app-accent-text);
   font-weight: 500;
 }
 
@@ -72,47 +72,87 @@
 
 .searchHint {
   margin: -8px 0 12px;
-  color: var(--ant-color-text-secondary);
+  color: var(--app-text-secondary);
   font-size: 13px;
 }
-
-:global(.dark-mode) {
-  .filterTag {
-    border-color: rgba(255, 255, 255, 0.16);
-    background: #1f1f1f;
-    color: rgba(255, 255, 255, 0.65);
-
-    &:hover:not(.filterTagActive) {
-      border-color: rgba(255, 255, 255, 0.3);
-      color: rgba(255, 255, 255, 0.88);
-    }
-  }
-
-  .filterTagActive {
-    border-color: rgba(255, 127, 22, 0.5);
-    background: rgba(255, 127, 22, 0.18);
-    color: #ffad66;
-  }
-}
-
 @media (max-width: 767px) {
+  // Keep search and actions on one row; controls shrink instead of stacking.
   .controlRow {
-    align-items: stretch;
-    flex-direction: column;
+    align-items: center;
     gap: 8px;
   }
 
   .search {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
+    width: auto;
   }
 
   .controlActions {
-    width: 100%;
+    flex-shrink: 0;
   }
 
   .sort {
     min-width: 0;
     flex: 1;
     width: auto;
+  }
+
+  // Market row (search + sort + refresh) is too tight on one line:
+  // search takes the first row, sort + refresh the second.
+  .controlRowMarket {
+    flex-wrap: wrap;
+
+    .search {
+      flex: 1 1 100%;
+    }
+
+    .controlActions {
+      width: 100%;
+    }
+  }
+}
+
+// Touch devices bump .qwenpaw-btn to 44px (workspace.css coarse-pointer rule);
+// match inputs and selects so search / sort / refresh share one height.
+@media (pointer: coarse) {
+  .controlRow {
+    :global(:is(.qwenpaw-input-affix-wrapper, .ant-input-affix-wrapper)) {
+      height: 44px;
+
+      > :global(:is(.qwenpaw-input, .ant-input)) {
+        height: 100%;
+      }
+    }
+
+    // antd pins the single-select root to 32px while the selector stretches,
+    // which offsets the box against sibling controls and leaves the label /
+    // arrow off-center; stretch root + selector + line-height together.
+    :global(:is(.qwenpaw-select-single, .ant-select-single)) {
+      height: 44px;
+
+      :global(:is(.qwenpaw-select-selector, .ant-select-selector)) {
+        height: 100%;
+      }
+
+      :global(:is(.qwenpaw-select-selection-item, .ant-select-selection-item)),
+      :global(
+          :is(
+              .qwenpaw-select-selection-placeholder,
+              .ant-select-selection-placeholder
+            )
+        ) {
+        line-height: 42px;
+      }
+    }
+
+    // Keep the square icon button square under the 44px touch height.
+    .iconButton {
+      width: 44px;
+    }
+  }
+
+  .filterTag {
+    min-height: 44px;
   }
 }

@@ -19,12 +19,15 @@ Contributors read configuration from ``ctx.extras``:
 
 from __future__ import annotations
 
+
 import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..utils.io_utils import run_sync_io
 from .prompt_manager import PromptManager, SyncPromptContributor
+from .protected_prompt import PROTECTED_EXECUTION_CONTRACT_PROMPT
 
 if TYPE_CHECKING:
     from .hooks import HookContext
@@ -132,21 +135,14 @@ def _process_memory_section(
 # ---------------------------------------------------------------------------
 
 
-class AgentIdentityContributor(SyncPromptContributor):
-    """Prepend agent identity header when ``agent_id`` is set."""
+class ProtectedExecutionContractContributor(SyncPromptContributor):
+    """Inject the protected execution and authorization contract."""
 
-    name = "agent_identity"
+    name = "protected_execution_contract"
     priority = 5
 
     def contribute_sync(self, ctx: "HookContext") -> str | None:
-        agent_id = getattr(ctx, "agent_id", None)
-        if not agent_id:
-            return None
-        return (
-            f"# Agent Identity\n\n"
-            f"Your agent id is `{agent_id}`. "
-            f"This is your unique identifier in the multi-agent system."
-        )
+        return PROTECTED_EXECUTION_CONTRACT_PROMPT
 
 
 class AgentsMdContributor(SyncPromptContributor):
@@ -262,10 +258,16 @@ class MultimodalHintContributor(SyncPromptContributor):
     name = "multimodal_hint"
     priority = 80
 
+    async def contribute(self, ctx: "HookContext") -> str | None:
+        """Resolve potentially remote model metadata outside the event loop."""
+        return await run_sync_io(self.contribute_sync, ctx)
+
     def contribute_sync(self, ctx: "HookContext") -> str | None:
         from ..agents.prompt import build_multimodal_hint
 
-        hint = build_multimodal_hint()
+        hint = build_multimodal_hint(
+            (getattr(ctx, "extras", None) or {}).get("agent_config"),
+        )
         return hint or None
 
 
@@ -384,7 +386,7 @@ class DirectoryContextContributor(SyncPromptContributor):
 
 
 class CodingModeContributor(SyncPromptContributor):
-    """Inject Coding Mode persona block when coding mode is active.
+    """Inject Code Mode orchestration guidance when enabled.
 
     Only code-specific guidance lives here. The project/workspace paths
     themselves come from :class:`DirectoryContextContributor`, which
@@ -402,9 +404,9 @@ class CodingModeContributor(SyncPromptContributor):
         cm = getattr(agent_config, "coding_mode", None)
         if not cm or not getattr(cm, "enabled", False):
             return None
-        from ..modes.coding import _CODING_SYSTEM_PROMPT_TEMPLATE
+        from ..modes.coding.prompt import CODING_GUIDELINES
 
-        return _CODING_SYSTEM_PROMPT_TEMPLATE
+        return CODING_GUIDELINES
 
 
 class ScrollContextContributor(SyncPromptContributor):
@@ -496,7 +498,7 @@ class PreloadedSkillsContributor(SyncPromptContributor):
 # ---------------------------------------------------------------------------
 
 _ALL_CONTRIBUTORS = (
-    AgentIdentityContributor,
+    ProtectedExecutionContractContributor,
     WorkspacePromptFilesContributor,
     MultimodalHintContributor,
     DirectoryContextContributor,
@@ -517,7 +519,7 @@ def build_default_prompt_manager() -> PromptManager:
 
 
 __all__ = [
-    "AgentIdentityContributor",
+    "ProtectedExecutionContractContributor",
     "AgentsMdContributor",
     "SoulMdContributor",
     "ProfileMdContributor",

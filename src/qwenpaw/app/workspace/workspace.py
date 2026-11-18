@@ -10,18 +10,30 @@ Each Workspace represents a standalone agent workspace with its own:
 
 Request processing is handled by ``Runtime`` (see ``stream_query``).
 """
+
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Iterable, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Callable,
+    Iterable,
+    Optional,
+)
 
 from ...config.timezone import normalize_tz
 from ...config.utils import load_config
+from ...constant import WORKING_DIR
 from ...utils.io_utils import run_async_to_completion
 
 from .service_manager import ServiceDescriptor, ServiceManager
 from .workspace_plugins import WorkspacePlugins
 from .service_factories import (
+    create_history_service,
+    prepare_history_service,
+    history_service_reuse_compatible,
     create_driver_service,
     create_driver_config_watcher,
     create_chat_service,
@@ -34,41 +46,100 @@ from ..task_tracker import TaskTracker
 from ..chats.session import SafeJSONSession
 from ..crons.manager import CronManager
 from ..crons.repo.json_repo import JsonJobRepository
-from ...config.config import load_agent_config
+from ...config.config import load_agent_config, load_agent_config_async
 from ...utils.logging import sanitize_log_value
+from ...plugins._events import observe_stream as _sdk_observe_stream
+
+if TYPE_CHECKING:
+    from ...agents.context.scroll.history import HistoryStore
+    from ...memory import MemoryBackendContext
 
 logger = logging.getLogger(__name__)
+
+_MEMORY_BACKEND_FALLBACK = "remelight"
+
+
+def _configured_memory_backend_id(ws: "Workspace") -> str:
+    """Return the canonical backend selected in persisted Agent config."""
+    return ws.config.running.memory_manager_backend.strip().lower()
+
+
+def _effective_memory_backend_id(ws: "Workspace") -> str:
+    """Resolve the runtime backend without rewriting the configured choice."""
+    from ...memory import (
+        MemoryBackendUnavailableError,
+        get_memory_manager_backend,
+    )
+
+    configured = _configured_memory_backend_id(ws)
+    try:
+        get_memory_manager_backend(configured)
+    except MemoryBackendUnavailableError:
+        if configured == _MEMORY_BACKEND_FALLBACK:
+            raise
+        logger.warning(
+            "Configured memory backend '%s' is unavailable for agent '%s'; "
+            "using '%s' until the configured backend is available",
+            sanitize_log_value(configured),
+            sanitize_log_value(ws.agent_id),
+            _MEMORY_BACKEND_FALLBACK,
+        )
+        return _MEMORY_BACKEND_FALLBACK
+    return configured
+
+
+def _memory_backend_context(
+    ws: "Workspace",
+    backend_id: str | None = None,
+) -> "MemoryBackendContext":
+    """Snapshot all construction settings used by core and plugin backends."""
+    from ...memory import MemoryBackendContext
+
+    config = ws.config
+    running = config.running
+    backend_id = backend_id or _configured_memory_backend_id(ws)
+    backend_configs = getattr(running, "memory_backend_configs", {})
+    raw_config = dict(backend_configs.get(backend_id, {}) or {})
+    try:
+        estimate_divisor = float(
+            running.light_context_config.token_count_estimate_divisor,
+        )
+    except (AttributeError, TypeError, ValueError):
+        estimate_divisor = 4.0
+    return MemoryBackendContext(
+        agent_id=ws.agent_id,
+        working_dir=ws.workspace_dir,
+        host_working_dir=WORKING_DIR,
+        backend_config=raw_config,
+        language=getattr(config, "language", "zh") or "zh",
+        token_estimate_divisor=(
+            estimate_divisor if estimate_divisor > 0 else 4.0
+        ),
+    )
 
 
 def _memory_manager_reuse_compatible(
     workspace: "Workspace",
     instance: Any,
 ) -> bool:
-    """Keep a memory service only when its backend configuration is unchanged.
+    """Keep a memory service only when its construction context is unchanged.
 
     Reused services do not receive ``start()`` on workspace reload.  Remote
     backends therefore must be recreated when their endpoint, credentials,
     scope, timeout, or search settings change; otherwise the old HTTP client
-    would continue serving the new workspace configuration.
+    would continue serving the new workspace configuration. Language and
+    token estimates are also frozen in the plugin's construction context.
     """
-    from ...agents.memory.powercontext_memory_manager import (
-        PowerContextMemoryManager,
+    old_context = getattr(instance, "context", None)
+    if old_context is None:
+        return False
+    return old_context == _memory_backend_context(
+        workspace,
+        _effective_memory_backend_id(workspace),
     )
 
-    if not isinstance(instance, PowerContextMemoryManager):
-        return True
-    old_config = getattr(instance, "_config", None)
-    new_running = getattr(getattr(workspace, "_config", None), "running", None)
-    new_config = getattr(new_running, "powercontext_memory_config", None)
-    if old_config is None or new_config is None:
-        return old_config is new_config
-    try:
-        return old_config.model_dump() == new_config.model_dump()
-    except AttributeError:
-        return old_config == new_config
 
-
-class Workspace:
+class Workspace:  # pylint: disable=too-many-public-methods
     """Single agent workspace with complete runtime components.
 
     Each Workspace is an independent agent instance with its own:
@@ -82,13 +153,24 @@ class Workspace:
     to ``Runtime.run()``.
     """
 
-    def __init__(self, agent_id: str, workspace_dir: str):
+    def __init__(
+        self,
+        agent_id: str,
+        workspace_dir: str,
+        *,
+        mode_config_overrides: dict[str, dict[str, Any]] | None = None,
+    ):
         """Initialize agent instance.
 
         Args:
             agent_id: Unique agent identifier
             workspace_dir: Path to agent's workspace directory
+            mode_config_overrides: Process-local mode settings, never saved.
         """
+        self.mode_config_overrides = {
+            name: dict(values)
+            for name, values in (mode_config_overrides or {}).items()
+        }
         self.agent_id = agent_id
         self.workspace_dir = Path(workspace_dir).expanduser()
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -109,12 +191,14 @@ class Workspace:
         # Non-service state
         self._config = None  # Loaded before start()
         self._config_mtime: float | None = None
+        self.cron_start_paused = False
+        self._history_retention_days = 0
         self._started = False
         self._start_attempted = False
         self._manager = None  # Reference to MultiAgentManager
         self._task_tracker = TaskTracker()
         self._app_services: Any = None
-        self._harness_runtime = None
+        self._backend_runtime = None
 
         # Register all services
         self._register_services()
@@ -125,6 +209,11 @@ class Workspace:
         )
 
     # Service access via properties (delegates to ServiceManager)
+    @property
+    def history_store(self) -> Optional["HistoryStore"]:
+        """Shared Scroll store; request context managers only borrow it."""
+        return self._service_manager.services.get("history_store")
+
     @property
     def session(self) -> Optional[SafeJSONSession]:
         """Get session instance from ServiceManager."""
@@ -206,18 +295,18 @@ class Workspace:
         return self._local_workspace
 
     @property
-    def harness_runtime(self):
-        """Return the lazily-created third-party agent runtime."""
-        if self._harness_runtime is None:
-            from ...harnesses import HarnessRuntime
+    def backend_runtime(self):
+        """Create plugin backend execution for an actual operation."""
+        if self._backend_runtime is None:
+            from ...runtime.backends.execution import BackendExecution
 
-            self._harness_runtime = HarnessRuntime(
+            self._backend_runtime = BackendExecution(
                 self.workspace_dir,
                 self.session,
                 self.agent_id,
                 self,
             )
-        return self._harness_runtime
+        return self._backend_runtime
 
     def bootstrap_plugins(  # pylint: disable=too-many-branches
         self,
@@ -345,6 +434,7 @@ class Workspace:
         """Inject the cross-workspace AppServiceManager reference."""
         self._app_services = app_services
 
+    @_sdk_observe_stream
     async def stream_query(
         self,
         request: Any,
@@ -353,40 +443,60 @@ class Workspace:
 
         Drop-in replacement for the old ``Runner.stream_query()``.
         """
-        config = load_agent_config(self.agent_id)
+        available = getattr(self._manager, "assert_agent_available", None)
+        if available is not None:
+            available(self.agent_id)
+        from ...schemas import AgentRequest
+
+        if isinstance(request, dict):
+            request = AgentRequest(**request)
+
+        config = await load_agent_config_async(self.agent_id)
         backend = config.backend
         if backend != "qwenpaw":
-            settings = dict(getattr(config, "backend_settings", {}))
             request_context = dict(
                 getattr(request, "request_context", None) or {},
             )
+            if request_context.get("source") == "portability_adaptation":
+                raise PermissionError(
+                    "PawPort compatibility workers require the qwenpaw "
+                    "backend",
+                )
+            settings = dict(getattr(config, "backend_settings", {}))
             backend_controls = request_context.pop(
                 "backend_controls",
                 {},
             )
             if isinstance(backend_controls, dict):
                 settings.update(backend_controls)
-            settings["_request_context"] = {
-                **request_context,
-                "agent_id": self.agent_id,
-                "session_id": getattr(request, "session_id", None),
-                "user_id": getattr(request, "user_id", None),
-                "channel": getattr(request, "channel", None) or "console",
-            }
-            async for item in self.harness_runtime.stream(
-                backend=backend,
-                request=request,
-                cwd=self.workspace_dir.resolve(),
-                settings=settings,
-            ):
-                yield item
+            stream = self.backend_runtime.stream(
+                backend,
+                request,
+                settings,
+                cwd=self.workspace_dir,
+            )
+            try:
+                async for item in stream:
+                    yield item
+            finally:
+                from ...plugins._events import observing
+
+                if observing():
+                    await stream.aclose()
             return
 
-        from ...runtime import Runtime
+        from ...runtime.runtime import Runtime
 
         rt = Runtime(workspace=self, app_services=self._app_services)
-        async for item in rt.run(request):
-            yield item
+        stream = rt.run(request)
+        try:
+            async for item in stream:
+                yield item
+        finally:
+            from ...plugins._events import observing
+
+            if observing():
+                await stream.aclose()
 
     def _register_services(  # pylint: disable=too-many-statements
         self,
@@ -398,10 +508,31 @@ class Workspace:
         """
         # pylint: disable=protected-access
         from ...agents.memory.base_memory_manager import (
+            MemoryBackendUnavailableError,
+            create_memory_manager_backend,
             get_memory_manager_backend,
         )
 
         sm = self._service_manager
+
+        def _memory_manager_class(ws: "Workspace") -> type:
+            return get_memory_manager_backend(_effective_memory_backend_id(ws))
+
+        def _create_memory_manager(ws: "Workspace") -> Any:
+            configured = _configured_memory_backend_id(ws)
+            try:
+                return create_memory_manager_backend(
+                    configured,
+                    _memory_backend_context(ws, configured),
+                )
+            except MemoryBackendUnavailableError:
+                if configured == _MEMORY_BACKEND_FALLBACK:
+                    raise
+                fallback = _effective_memory_backend_id(ws)
+                return create_memory_manager_backend(
+                    fallback,
+                    _memory_backend_context(ws, fallback),
+                )
 
         # Priority 5: LocalWorkspace (tool routing)
         def _init_local_workspace(
@@ -436,27 +567,41 @@ class Workspace:
             ),
         )
 
+        # Close after request-producing services. Reload transfers this store
+        # only when its configured path and file identity still match.
+        sm.register(
+            ServiceDescriptor(
+                name="history_store",
+                create_service=create_history_service,
+                post_init=prepare_history_service,
+                stop_method="shutdown",
+                reusable=True,
+                reuse_compatibility=history_service_reuse_compatible,
+                require_clean_stop=True,
+                priority=15,
+            ),
+        )
+
         # Priority 20: Core services (concurrent)
         sm.register(
             ServiceDescriptor(
                 name="memory_manager",
-                service_class=lambda ws: get_memory_manager_backend(
-                    ws._config.running.memory_manager_backend,
-                ),
-                init_args=lambda ws: {
-                    "working_dir": str(ws.workspace_dir),
-                    "agent_id": ws.agent_id,
-                },
+                service_class=_memory_manager_class,
+                create_service=_create_memory_manager,
                 start_method="start",
                 stop_method="close",
                 reusable=True,
                 reuse_compatibility=_memory_manager_reuse_compatible,
+                require_clean_stop=True,
                 priority=20,
                 concurrent_init=True,
                 # reme depends on `agentscope.token`, which agentscope no
                 # longer ships; let the workspace boot without
                 # memory_manager when its import fails.
                 optional=True,
+                # The configured backend falls back before construction. A
+                # missing core fallback remains a fatal installation error.
+                fatal_exceptions=(MemoryBackendUnavailableError,),
             ),
         )
 
@@ -491,6 +636,7 @@ class Workspace:
                 post_init=create_channel_service,
                 start_method="start_all",
                 stop_method="stop_all",
+                require_clean_stop=True,
                 priority=30,
                 concurrent_init=False,
             ),
@@ -514,6 +660,7 @@ class Workspace:
                     )
                     or "UTC",
                     "agent_id": ws.agent_id,
+                    "start_paused": ws.cron_start_paused,
                 },
                 start_method="start",
                 stop_method="stop",
@@ -586,13 +733,20 @@ class Workspace:
         if self._started:
             logger.warning(
                 f"Cannot set reusable components for already started "
-                f"workspace: {self.agent_id}",
+                f"workspace: {sanitize_log_value(self.agent_id)}",
             )
             return
 
         # Delegate to ServiceManager
         for name, component in components.items():
             await self._service_manager.set_reusable(name, component)
+
+    async def start_history_retention(self) -> None:
+        """Apply maintenance only after this workspace owns the agent."""
+        if self.history_store is not None:
+            await self.history_store.start_retention(
+                self._history_retention_days,
+            )
 
     async def start(self):
         """Start workspace and initialize all components."""
@@ -604,6 +758,9 @@ class Workspace:
             return
 
         self._start_attempted = True
+        from ...plugins.registry import PluginRegistry
+
+        PluginRegistry().projector.track_workspace(self)
 
         logger.info(
             f"Starting workspace: {sanitize_log_value(self.agent_id)}",
@@ -617,12 +774,17 @@ class Workspace:
             ensure_skill_pool_initialized()
         except Exception as e:
             logger.warning(
-                f"Skill pool initialization failed (non-fatal): {e}",
+                "Skill pool initialization failed (non-fatal): "
+                f"{sanitize_log_value(e)}",
             )
 
         try:
             # 1. Load agent configuration
             self._config = load_agent_config(self.agent_id)
+            lcc = self._config.running.light_context_config
+            self._history_retention_days = (
+                lcc.scroll_config.history_retention_days
+            )
             logger.debug(
                 "Loaded config for agent: "
                 f"{sanitize_log_value(self.agent_id)}",
@@ -636,6 +798,9 @@ class Workspace:
             await self._service_manager.start_all()
 
             self._started = True
+            # Reload candidates activate maintenance after ownership commits.
+            if not self.cron_start_paused:
+                await self.start_history_retention()
             logger.info(
                 "Workspace started successfully: "
                 f"{sanitize_log_value(self.agent_id)}",
@@ -725,12 +890,36 @@ class Workspace:
                 sanitize_log_value(exc),
             )
 
+    async def cancel_active_requests(self) -> None:
+        """Cancel this workspace's requests and finish their cleanup."""
+        tasks = list(
+            (
+                await self.task_tracker.snapshot_active_tasks(owner=self)
+            ).values(),
+        )
+        if asyncio.current_task() in tasks:
+            raise RuntimeError("A workspace request cannot await its own stop")
+
+        async def cancel_and_drain() -> None:
+            for task in tasks:
+                if not task.done() and (
+                    not isinstance(task, asyncio.Task) or not task.cancelling()
+                ):
+                    task.cancel("workspace shutdown")
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Repeated cancellation of the caller must not interrupt final writes.
+        await run_async_to_completion(cancel_and_drain())
+
     async def stop(
         self,
         final: bool = True,
         preserve_reused: bool = False,
     ):
         """Stop agent instance and clean up all resources.
+
+        Attempt every independent cleanup stage before reporting errors.
+        Failed cleanup retains running flags and unfinished handles for retry.
 
         Args:
             final: If True (default), stop ALL services including reusable.
@@ -749,18 +938,59 @@ class Workspace:
             f"{sanitize_log_value(self.agent_id)} (final={final})",
         )
 
-        # Stop all services via ServiceManager (handles reuse automatically)
-        await self._service_manager.stop_all(
-            final=final,
-            preserve_reused=preserve_reused,
-        )
+        if final:
+            # Keep services available until request persistence and cleanup
+            # complete. Reloads drain naturally and must not cancel requests.
+            await self.cancel_active_requests()
 
-        if self._harness_runtime is not None:
-            await self._harness_runtime.stop()
-            self._harness_runtime = None
+        # Revoke this instance's plugin bindings while its managers are alive.
+        # Reload candidates and draining old instances may share an agent id.
+        from ...plugins.registry import PluginRegistry
+
+        if self.channel_manager is not None:
+            from ...plugins.lifecycle import QuiescenceError
+
+            if not await self.channel_manager.quiesce(for_stop=True):
+                raise QuiescenceError("CHANNEL_DRAIN_TIMEOUT")
+        errors: list[tuple[str, Exception]] = []
+        try:
+            await PluginRegistry().projector.revoke_workspace(self)
+        except Exception as exc:
+            errors.append(("plugin bindings", exc))
+        if self.channel_manager is not None:
+            try:
+                await self.channel_manager.stop_all()
+            except Exception as exc:
+                errors.append(("channels", exc))
+
+        # Stop all services via ServiceManager (handles reuse automatically)
+        try:
+            await self._service_manager.stop_all(
+                final=final,
+                preserve_reused=preserve_reused,
+            )
+        except Exception as exc:
+            errors.append(("services", exc))
+
+        if self._backend_runtime is not None:
+            try:
+                await self._backend_runtime.close()
+            except Exception as exc:
+                errors.append(("plugin backends", exc))
+            else:
+                self._backend_runtime = None
+
+        if len(errors) == 1:
+            raise errors[0][1]
+        if errors:
+            details = "; ".join(f"{stage}: {exc}" for stage, exc in errors)
+            raise RuntimeError(f"Workspace cleanup failed: {details}") from (
+                errors[0][1]
+            )
 
         self._started = False
         self._start_attempted = False
+        PluginRegistry().projector.forget_workspace(self)
         logger.info(
             f"Workspace stopped: {sanitize_log_value(self.agent_id)}",
         )

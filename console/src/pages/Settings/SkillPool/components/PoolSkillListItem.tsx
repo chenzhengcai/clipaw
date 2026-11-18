@@ -10,6 +10,7 @@ import {
   isSkillBuiltin,
 } from "@/utils/skill";
 import { SkillVisual } from "@/components/SkillVisual";
+import { CommunityFeedback } from "@/components/CommunityFeedback";
 import { SkillTagChips } from "./SkillMeta";
 import styles from "../index.module.less";
 dayjs.extend(relativeTime);
@@ -79,9 +80,19 @@ export function PoolSkillListItem({
         </span>
         <div className={styles.listItemInfo}>
           <div className={styles.listItemHeader}>
+            <CommunityFeedback
+              origin={skill.installation_origin}
+              resourceName={skill.name}
+              variant="inline"
+            />
             <span className={styles.skillTitle}>{skill.name}</span>
             {isBuiltin && (
               <span className={styles.typeBadge}>{t("skillPool.builtin")}</span>
+            )}
+            {skill.version_text && (
+              <span className={styles.typeBadge}>
+                {t("skillPool.version")}: {skill.version_text}
+              </span>
             )}
             {automationLabel && (
               <span className={styles.automationTag}>{automationLabel}</span>

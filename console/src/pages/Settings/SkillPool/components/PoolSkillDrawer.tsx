@@ -1,11 +1,5 @@
-import {
-  Button,
-  Drawer,
-  Form,
-  Input,
-  Select,
-  Switch,
-} from "@agentscope-ai/design";
+import { SettingsDrawer as Drawer } from "@/components/interaction/SettingsDrawer";
+import { Button, Form, Input, Select, Switch } from "@agentscope-ai/design";
 import { useTranslation } from "react-i18next";
 import type {
   PoolSkillDetail,
@@ -20,6 +14,7 @@ import {
 import { getAgentDisplayName } from "../../../../utils/agentDisplayName";
 import { MAX_TAGS, MAX_TAG_LENGTH } from "../../../Agent/Skills/components";
 import { MarkdownCopy } from "../../../../components/MarkdownCopy/MarkdownCopy";
+import { SkillConfigEditor } from "../../../../components/SkillConfigEditor";
 import type { PoolMode } from "../useSkillPool";
 import styles from "../index.module.less";
 
@@ -134,7 +129,10 @@ export function PoolSkillDrawer({
                 (activeSkill.available_builtin_languages?.length ?? 0) > 1 &&
                 onChangeBuiltinLanguage && (
                   <div className={styles.infoSection}>
-                    <div className={styles.infoLabel}>
+                    <div
+                      className={styles.infoLabel}
+                      data-settings-target="skillPool.builtinLanguage"
+                    >
                       {t("skillPool.builtinLanguage")}
                     </div>
                     <div className={styles.languageToggle}>
@@ -168,7 +166,10 @@ export function PoolSkillDrawer({
                 </div>
               </div>
               <div className={styles.infoSection}>
-                <div className={styles.infoLabel}>
+                <div
+                  className={styles.infoLabel}
+                  data-settings-target="skillPool.automation"
+                >
                   {t("skillPool.automation")}
                 </div>
                 <div className={styles.automationPanel}>
@@ -176,7 +177,10 @@ export function PoolSkillDrawer({
                     <div className={styles.automationSetting}>
                       <div className={styles.automationSettingHeader}>
                         <div>
-                          <div className={styles.automationSettingTitle}>
+                          <div
+                            className={styles.automationSettingTitle}
+                            data-settings-target="skillPool.builtinAutoUpdate"
+                          >
                             {t("skillPool.builtinAutoUpdate")}
                           </div>
                           <div className={styles.automationFlow}>
@@ -198,7 +202,10 @@ export function PoolSkillDrawer({
                   <div className={styles.automationSetting}>
                     <div className={styles.automationSettingHeader}>
                       <div>
-                        <div className={styles.automationSettingTitle}>
+                        <div
+                          className={styles.automationSettingTitle}
+                          data-settings-target="skillPool.autoSync"
+                        >
                           {t("skillPool.autoSync")}
                         </div>
                         <div className={styles.automationFlow}>
@@ -301,13 +308,12 @@ export function PoolSkillDrawer({
             </Form.Item>
 
             <Form.Item label={t("skills.config")}>
-              <Input.TextArea
-                rows={4}
+              <SkillConfigEditor
                 value={configText}
-                onChange={(e) => {
-                  onConfigTextChange(e.target.value);
-                }}
-                placeholder={t("skills.configPlaceholder")}
+                onChange={onConfigTextChange}
+                requirements={
+                  mode === "edit" ? activeSkill?.requirements : undefined
+                }
               />
             </Form.Item>
           </Form>

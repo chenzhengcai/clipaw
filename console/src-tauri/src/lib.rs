@@ -2,12 +2,20 @@
 
 mod backend;
 mod backend_download;
+mod channel_runtime;
 #[cfg(all(target_os = "macos", not(debug_assertions)))]
 mod computer_use_helper;
 mod computer_use_protocol;
 mod computer_use_runtime;
 mod external_link;
+mod notifications;
+mod notification_delivery;
+#[cfg(all(target_os = "macos", debug_assertions))]
+mod macos_dev_bundle;
 mod runtime_env;
+mod startup_diagnostics;
+#[cfg(test)]
+mod test_support;
 mod tray;
 mod updates;
 #[cfg(windows)]
@@ -24,8 +32,39 @@ fn open_devtools(window: WebviewWindow) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-/// Build the desktop app, wire native plugins/commands, and stop the backend on exit.
+/// Build the desktop app, wire native plugins/commands, and attach to the shared runtime.
 pub fn run() {
+    startup_diagnostics::init(startup_diagnostics::Mode::Desktop);
+    startup_diagnostics::record("Load desktop context", "started");
+    let context = tauri::generate_context!();
+    startup_diagnostics::set_desktop_version(&context.package_info().version.to_string());
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    if let Err(error) = macos_dev_bundle::relaunch_if_needed(
+        &context.config().identifier,
+        context
+            .config()
+            .product_name
+            .as_deref()
+            .unwrap_or("QwenPaw Desktop"),
+        env!("CARGO_PKG_VERSION"),
+    ) {
+        startup_diagnostics::report_fatal("Prepare macOS development bundle", &error);
+        std::process::exit(1);
+    }
+    startup_diagnostics::record("Register desktop window", "started");
+    let registration = match updates::coordination::register_desktop(&context.config().identifier) {
+        Ok(Some(registration)) => registration,
+        Ok(None) => {
+            startup_diagnostics::record("Update deferred", "Desktop start deferred while updating");
+            startup_diagnostics::show_update_in_progress();
+            return;
+        }
+        Err(error) => {
+            startup_diagnostics::report_fatal("Register desktop window", &error);
+            std::process::exit(1);
+        }
+    };
+    startup_diagnostics::record("Build desktop application", "started");
     let build_result = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -36,13 +75,20 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             open_devtools,
+            notifications::start_console_polling,
+            notifications::stop_console_polling,
+            notifications::configure_approval_notifications,
+            notifications::get_notification_permission,
+            notifications::request_notification_permission,
+            notifications::configure_system_notifications,
+            notifications::open_notification_settings,
+            notification_delivery::take_notification_target,
             backend_download::download_backend_file,
-            backend_download::read_workspace_binary_file,
-            backend::backend_port,
-            backend::backend_startup_error,
+            backend::agent_host_state,
             backend::restart_backend,
             external_link::open_external_link,
             external_link::open_workspace_html,
+            updates::coordination::confirm_desktop_update,
             updates::check_desktop_update,
             updates::install_desktop_update,
             updates::download_desktop_update,
@@ -50,20 +96,28 @@ pub fn run() {
             updates::check_cached_update,
             tray::minimize_to_tray,
             tray::quit_app,
+            tray::stop_service,
             tray::set_tray_labels,
             tray::ack_close,
+            tray::set_close_action,
+            tray::get_close_action,
         ])
+        .manage(registration)
+        .manage(updates::coordination::Confirmation::default())
         .manage(backend::BackendState::default())
         .manage(computer_use_runtime::ComputerUseRuntimeState::default())
         .manage(tray::TrayState::default())
+        .manage(notifications::NotificationState::default())
+        .manage(notification_delivery::ActivationState::default())
         .setup(|app| {
-            backend::setup(app)?;
-            tray::setup(app)?;
-            #[cfg(windows)]
-            if let Some(window) = app.get_webview_window("main") {
-                if let Err(err) = webview_recovery::install(&window) {
-                    log::error!("[webview] failed to install browser-process recovery: {err}");
-                }
+            // Tauri runs setup inside the event loop and panics on errors, which
+            // release builds never show. Report and exit here instead.
+            if let Err(error) = setup_desktop(app) {
+                startup_diagnostics::report_fatal(
+                    &startup_diagnostics::current_stage(),
+                    &startup_diagnostics::error_chain(error.as_ref()),
+                );
+                std::process::exit(1);
             }
             Ok(())
         })
@@ -73,62 +127,30 @@ pub fn run() {
                 tray::request_close(window.app_handle());
             }
         })
-        .build(tauri::generate_context!());
+        .build(context);
 
     match build_result {
         Ok(app) => {
+            startup_diagnostics::record(
+                "Desktop application built",
+                "Setup runs when the event loop starts",
+            );
             app.run(|app_handle, event| match event {
-                // `code` is `None` only for OS-initiated quits (e.g. macOS
-                // Cmd+Q / app menu Quit). On macOS we call `exit_app` directly
-                // (same as the X button / tray Quit) so the detached shutdown
-                // thread always runs, even if the frontend WebView is
-                // unresponsive after the Cmd+Q signal. Programmatic exits from
-                // `quit_app` carry a `code` and fall through to the normal
-                // shutdown path below.
                 RunEvent::ExitRequested { api, code, .. } => {
                     #[cfg(windows)]
                     if code.is_none() && webview_recovery::is_active() {
                         api.prevent_exit();
-                        log::warn!("[webview] keeping the app alive while the main window recovers");
                         return;
                     }
                     #[cfg(target_os = "macos")]
-                    if code.is_none() {
-                        // macOS Cmd+Q / app menu Quit. We MUST prevent the OS
-                        // from terminating the app here, otherwise the detached
-                        // shutdown thread spawned by `exit_app` is killed
-                        // before it can stop the backend sidecar, leaving
-                        // `qwenpaw-backend` orphaned (reparented to launchd,
-                        // PPID 1). `exit_app` hides the window at once and its
-                        // shutdown thread calls `std::process::exit(0)` once
-                        // the sidecar is stopped, so preventing the exit only
-                        // keeps the process alive long enough for cleanup -
-                        // the window still vanishes immediately.
+                    if code.is_none() && !tray::is_quitting(app_handle) {
                         api.prevent_exit();
-                        tray::exit_app(app_handle);
+                        tray::request_quit(app_handle);
                         return;
                     }
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = (&api, &code);
-                    // If `quit_app` / tray Quit already started backend shutdown
-                    // via `exit_app`, a detached OS thread is handling
-                    // `stop_and_wait`, `computer_use_runtime::stop`, and will
-                    // call `std::process::exit(0)` itself when done (bypassing
-                    // `ExitRequested` to avoid a join deadlock). This branch is
-                    // only reached if an external `ExitRequested` fires while
-                    // the thread is still running (e.g. macOS second Cmd+Q or
-                    // system logout). We join the thread so the process does
-                    // not exit mid-cleanup; if the join times out, we abandon
-                    // it and let the process exit.
-                    if !tray::shutdown_initiated(app_handle) {
-                        if let Err(err) =
-                            tauri::async_runtime::block_on(backend::stop_and_wait(app_handle))
-                        {
-                            log::warn!("[backend] graceful shutdown did not complete: {err}");
-                        }
-                        computer_use_runtime::stop(app_handle);
-                    } else {
-                        tray::join_shutdown_thread(app_handle);
+                    if !tray::shutdown_complete(app_handle) {
+                        api.prevent_exit();
+                        tray::exit_app(app_handle, code.unwrap_or(0));
                     }
                 }
                 // macOS emits this when the user clicks the Dock icon. Without
@@ -138,21 +160,80 @@ pub fn run() {
                 RunEvent::Reopen { .. } => {
                     tray::show_main_window(app_handle);
                 }
-                RunEvent::Exit => {
-                    // macOS Cmd+Q / app-menu Quit reaches here (via
-                    // `applicationWillTerminate` -> `LoopDestroyed`), NOT
-                    // through `ExitRequested`. This is the last synchronous
-                    // chance to stop the backend sidecar before the process
-                    // exits and orphans it. Without this, the detached
-                    // shutdown thread is killed mid-cleanup.
-                    tray::exit_cleanup_blocking(app_handle);
-                }
                 _ => {}
             });
         }
         Err(err) => {
-            eprintln!("[QwenPaw Desktop] Fatal startup error: {err}");
+            startup_diagnostics::report_fatal(
+                &startup_diagnostics::current_stage(),
+                &startup_diagnostics::error_chain(&err),
+            );
             std::process::exit(1);
         }
+    }
+}
+
+/// Initialize coordination, logging, backend attachment and the tray.
+fn setup_desktop(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Automatic windows are created before our setup callback. Build the main
+    // window here so WebView initialization errors reach report_fatal too.
+    startup_diagnostics::record("Create main window", "label=main");
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == "main")
+        .ok_or("Main window configuration is missing")?;
+    tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.build()?;
+    startup_diagnostics::record("Initialize installation coordination", "started");
+    updates::coordination::setup(app.handle())?;
+    startup_diagnostics::record(
+        "Initialize desktop logging and backend attachment",
+        "started",
+    );
+    backend::setup(app)?;
+    startup_diagnostics::record("Initialize system tray", "started");
+    tray::setup(app)?;
+    #[cfg(windows)]
+    if let Err(error) = notification_delivery::setup(app.handle()) {
+        log::error!("Could not register desktop notification activation: {error}");
+    }
+    #[cfg(windows)]
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(err) = webview_recovery::install(&window) {
+            log::error!("[webview] failed to install browser-process recovery: {err}");
+        }
+    }
+    startup_diagnostics::record("Desktop ready", "Desktop setup completed");
+    Ok(())
+}
+
+/// Run the detached desktop supervisor without constructing a WebView.
+pub fn run_agent_host() -> Result<(), String> {
+    startup_diagnostics::init(startup_diagnostics::Mode::AgentHost);
+    startup_diagnostics::record("Start background supervisor", "started");
+    backend::daemon::run().inspect_err(|error| {
+        startup_diagnostics::report_fatal("Start background supervisor", error);
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn main_window_is_created_only_by_our_setup() {
+        let config: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let main: Vec<_> = config
+            .app
+            .windows
+            .iter()
+            .filter(|w| w.label == "main")
+            .collect();
+        assert_eq!(main.len(), 1);
+        assert!(
+            !main[0].create,
+            "Automatic creation bypasses startup diagnostics"
+        );
     }
 }

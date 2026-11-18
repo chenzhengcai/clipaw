@@ -1,3 +1,5 @@
+import type { InstallationOrigin } from "./community";
+
 export type SkillSyncStatus =
   | "-"
   | "synced"
@@ -6,8 +8,10 @@ export type SkillSyncStatus =
   | "conflict";
 
 export interface SkillSpec {
+  installation_origin?: InstallationOrigin | null;
   name: string;
   description?: string;
+  version_text?: string;
   source: string;
   enabled?: boolean;
   channels?: string[];
@@ -21,11 +25,20 @@ export interface SkillDetail extends SkillSpec {
   content: string;
   config?: Record<string, unknown>;
   installed_from?: string;
+  requirements?: SkillRequirements;
+}
+
+export interface SkillRequirements {
+  require_bins: string[];
+  require_envs: string[];
+  require_mcps: string[];
 }
 
 export interface PoolSkillSpec {
+  installation_origin?: InstallationOrigin | null;
   name: string;
   description?: string;
+  version_text?: string;
   source: string;
   external?: boolean;
   external_path?: string;
@@ -41,6 +54,7 @@ export interface PoolSkillDetail extends PoolSkillSpec {
   content: string;
   config?: Record<string, unknown>;
   installed_from?: string;
+  requirements?: SkillRequirements;
   builtin_language?: string;
   available_builtin_languages?: string[];
   auto_sync_targets?: string[] | null;
@@ -163,4 +177,28 @@ export interface HubInstallTaskResponse {
   } | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface SkillPoolDownloadRequest {
+  skill_name: string;
+  targets: Array<{ workspace_id: string }>;
+  all_workspaces?: boolean;
+  overwrite?: boolean;
+  preview_only?: boolean;
+}
+
+export type PoolDownloadState =
+  | "running"
+  | "cancelling"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface PoolDownloadJob {
+  job_id: string;
+  state: PoolDownloadState;
+  error: string | null;
+  /** Structured outcome: scan findings when rejected, downloaded workspaces
+   * when completed. */
+  result?: Record<string, unknown> | null;
 }

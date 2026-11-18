@@ -1,24 +1,22 @@
 # -*- coding: utf-8 -*-
-"""Workspace API – download / upload the entire WORKING_DIR as a zip.
+"""Workspace APIs for agent files, settings, and project directories.
 
-Also includes agent file management, language settings, audio/transcription
-configuration, running config, and system prompt files.
+Includes language settings, audio/transcription configuration, running
+config, and system prompt files.
 """
 
 from __future__ import annotations
 
 import asyncio
 import copy
-import io
 import json
 import logging
 import mimetypes
 import secrets
-import shutil
 import stat
 import tempfile
 import os
-import zipfile
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
@@ -80,6 +78,7 @@ from ...utils.io_utils import (
     run_async_to_completion,
     run_sync_io,
 )
+from ...utils.logging import sanitize_log_value
 from ..agent_context import (
     get_agent_for_request,
     get_agent_project_dir,
@@ -130,24 +129,6 @@ def _dir_stats(root: Path) -> tuple[int, int]:
                 count += 1
                 size += p.stat().st_size
     return count, size
-
-
-def _zip_directory(root: Path) -> io.BytesIO:
-    """Create an in-memory zip archive of *root* and return the buffer.
-
-    All files **and** directories (including empty ones) are included.
-    """
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for entry in sorted(root.rglob("*")):
-            arcname = entry.relative_to(root).as_posix()
-            if entry.is_file():
-                zf.write(entry, arcname)
-            elif entry.is_dir():
-                # Zip spec: directory entries end with '/'
-                zf.write(entry, arcname + "/")
-    buf.seek(0)
-    return buf
 
 
 # ---------------------------------------------------------------------------
@@ -1309,6 +1290,7 @@ async def put_agent_language(
             ),
             only_if_missing=False,
         )
+        schedule_agent_reload(request, agent_id)
 
     return {
         "language": language,
@@ -1486,6 +1468,51 @@ async def put_transcription_provider(
 
     await run_sync_io(mutate_config, apply_provider)
     return {"provider_id": provider_id}
+
+
+@router.get(
+    "/transcription-model",
+    summary="Get transcription model name",
+    description=(
+        "Get the model name used for Whisper API transcription. "
+        'Empty means the built-in default ("whisper-1").'
+    ),
+)
+async def get_transcription_model() -> dict:
+    """Get the Whisper API transcription model name."""
+    config = load_config()
+    return {"transcription_model": config.agents.transcription_model}
+
+
+@router.put(
+    "/transcription-model",
+    summary="Set transcription model name",
+    description=(
+        "Set the model name used for Whisper API transcription. "
+        "Non-OpenAI providers need their own model id, e.g. "
+        '"FunAudioLLM/SenseVoiceSmall" for SiliconFlow. '
+        'Use empty string "" to fall back to the default "whisper-1".'
+    ),
+)
+async def put_transcription_model(
+    body: dict = Body(
+        ...,
+        description=(
+            "Model name, e.g. "
+            '{"transcription_model": "FunAudioLLM/SenseVoiceSmall"} '
+            'or {"transcription_model": ""} to reset'
+        ),
+    ),
+) -> dict:
+    """Set the Whisper API transcription model name."""
+    raw = body.get("transcription_model")
+    model = (str(raw) if raw is not None else "").strip()
+
+    def apply_model(config: Any) -> None:
+        config.agents.transcription_model = model
+
+    await run_sync_io(mutate_config, apply_model)
+    return {"transcription_model": model}
 
 
 @router.post(
@@ -1729,9 +1756,66 @@ async def get_agents_running_config(
     """Get agent running configuration."""
     workspace = await get_agent_for_request(request)
     agent_config = await run_sync_io(load_agent_config, workspace.agent_id)
-    running = agent_config.running or AgentsRunningConfig()
+    running = _mask_memory_backend_secrets(
+        agent_config.running or AgentsRunningConfig(),
+    )
     running.approval_level = getattr(agent_config, "approval_level", "AUTO")
     return running
+
+
+def _mask_memory_backend_secrets(
+    running: AgentsRunningConfig,
+) -> AgentsRunningConfig:
+    """Return a detached API-safe config with plugin secrets masked."""
+    from qwenpaw.memory import memory_registry
+
+    masked = running.model_copy(deep=True)
+    for backend_id, values in list(masked.memory_backend_configs.items()):
+        registration = memory_registry.get_registration(backend_id)
+        if registration is None:
+            # Core cannot distinguish secrets inside an unavailable plugin's
+            # opaque payload. Preserve it server-side, but expose no values.
+            del masked.memory_backend_configs[backend_id]
+            continue
+        for field_name in registration.metadata.get("secret_fields", []):
+            if values.get(field_name):
+                values[field_name] = "***"
+    return masked
+
+
+def _safe_memory_validation_error(
+    exc: Exception,
+    submitted: dict[str, Any],
+    secret_fields: list[str],
+) -> str:
+    """Render plugin validation failures without echoing submitted secrets."""
+    detail = str(exc)
+
+    def secret_fragments(value: Any) -> list[str]:
+        if isinstance(value, Mapping):
+            fragments = [str(value), repr(value)]
+            for nested in value.values():
+                fragments.extend(secret_fragments(nested))
+            return fragments
+        if isinstance(value, (list, tuple, set, frozenset)):
+            fragments = [str(value), repr(value)]
+            for nested in value:
+                fragments.extend(secret_fragments(nested))
+            return fragments
+        if value is None:
+            return []
+        return [str(value), repr(value)]
+
+    for field_name in secret_fields:
+        secret = submitted.get(field_name)
+        fragments = sorted(
+            {fragment for fragment in secret_fragments(secret) if fragment},
+            key=len,
+            reverse=True,
+        )
+        for fragment in fragments:
+            detail = detail.replace(fragment, "***")
+    return detail
 
 
 class _ConfigRollbackConflict(RuntimeError):
@@ -1879,6 +1963,7 @@ async def _rollback_embedding_update(
     summary="Update agent running config",
     description="Update running configuration for active agent",
 )
+# pylint: disable-next=R0915,R0912
 async def put_agents_running_config(
     running_config: AgentsRunningConfig = Body(
         ...,
@@ -1892,21 +1977,106 @@ async def put_agents_running_config(
     workspace_dir = getattr(workspace, "workspace_dir", ".")
     config_path = Path(workspace_dir) / "agent.json"
     async with get_path_lock(config_path):
+        from qwenpaw.memory import (
+            MemoryBackendUnavailableError,
+            memory_registry,
+        )
+
+        backend_id = running_config.memory_manager_backend.strip().lower()
+        running_config.memory_manager_backend = backend_id
+        try:
+            selection_lease = memory_registry.reserve_selection(
+                backend_id,
+                workspace.agent_id,
+            )
+        except MemoryBackendUnavailableError:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "backend": running_config.memory_manager_backend,
+                    "reason": "plugin_not_installed",
+                },
+            ) from None
+        selected_registration = selection_lease.registration
+        if selected_registration.plugin_id != "core":
+            running_config.memory_backend_configs.setdefault(backend_id, {})
         old_agent_config = None
         embedding_changed = False
         memory_manager_backend_changed = False
         restores_indexed_space = False
+        lease_handed_off = False
         new_embedding_config = (
             running_config.reme_light_memory_config.embedding_model_config
         )
         new_memory_manager_backend = running_config.memory_manager_backend
 
+        # pylint: disable-next=R0912
         def persist_running_config(agent_config):
             nonlocal old_agent_config, embedding_changed
             nonlocal memory_manager_backend_changed
             nonlocal restores_indexed_space
             old_agent_config = agent_config.model_copy(deep=True)
             old_running_config = agent_config.running or AgentsRunningConfig()
+            old_backend_configs = old_running_config.memory_backend_configs
+
+            # Partial/redacted round trips must retain server-owned data.
+            # Unavailable plugins cannot validate or identify their secrets,
+            # so client-provided replacements for them are ignored as well.
+            for (
+                stored_backend_id,
+                current_config,
+            ) in old_backend_configs.items():
+                if (
+                    stored_backend_id
+                    not in running_config.memory_backend_configs
+                    or memory_registry.get_registration(stored_backend_id)
+                    is None
+                ):
+                    running_config.memory_backend_configs[
+                        stored_backend_id
+                    ] = copy.deepcopy(current_config)
+            for submitted_backend_id, submitted_config in list(
+                running_config.memory_backend_configs.items(),
+            ):
+                registration = memory_registry.get_registration(
+                    submitted_backend_id,
+                )
+                if registration is None:
+                    if submitted_backend_id not in old_backend_configs:
+                        del running_config.memory_backend_configs[
+                            submitted_backend_id
+                        ]
+                    continue
+                secret_fields = list(
+                    registration.metadata.get("secret_fields", []),
+                )
+                current_config = old_backend_configs.get(
+                    submitted_backend_id,
+                    {},
+                )
+                for field_name in secret_fields:
+                    if submitted_config.get(field_name) == "***":
+                        submitted_config[field_name] = current_config.get(
+                            field_name,
+                            "",
+                        )
+                if registration.config_schema is not None:
+                    try:
+                        validated = registration.config_schema.model_validate(
+                            submitted_config,
+                        )
+                    except Exception as exc:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=_safe_memory_validation_error(
+                                exc,
+                                submitted_config,
+                                secret_fields,
+                            ),
+                        ) from exc
+                    running_config.memory_backend_configs[
+                        submitted_backend_id
+                    ] = validated.model_dump()
             memory_manager_backend_changed = (
                 old_running_config.memory_manager_backend
                 != new_memory_manager_backend
@@ -1960,6 +2130,7 @@ async def put_agents_running_config(
             agent_config.running = running_config
 
         async def persist_apply_and_schedule() -> AgentProfileConfig:
+            nonlocal lease_handed_off
             agent_config = await update_agent_config_async(
                 workspace.agent_id,
                 persist_running_config,
@@ -1986,15 +2157,108 @@ async def put_agents_running_config(
                         agent_config,
                     )
 
-            schedule_agent_reload(request, workspace.agent_id)
+            if (
+                not memory_manager_backend_changed
+                or selected_registration.plugin_id == "core"
+            ):
+                schedule_agent_reload(request, workspace.agent_id)
+                return agent_config
+
+            assert old_agent_config is not None
+
+            async def complete_backend_reload(reloaded: bool) -> None:
+                try:
+                    if not reloaded:
+
+                        def rollback_config(current_config: BaseModel) -> None:
+                            _conditionally_restore_config_changes(
+                                current_config,
+                                old_agent_config,
+                                agent_config,
+                            )
+
+                        try:
+                            await update_agent_config_async(
+                                workspace.agent_id,
+                                rollback_config,
+                            )
+                        except _ConfigRollbackConflict as exc:
+                            logger.error(
+                                "Backend reload failed for agent '%s' and "
+                                "config rollback conflicted at: %s",
+                                sanitize_log_value(workspace.agent_id),
+                                ", ".join(exc.paths),
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Backend reload failed and config rollback "
+                                "failed for agent '%s'",
+                                sanitize_log_value(workspace.agent_id),
+                            )
+                        else:
+                            # The failed reload may have left a newer candidate
+                            # running with the rejected backend while the
+                            # persisted config is restored. Schedule a fresh
+                            # reload after the rollback so runtime and disk
+                            # converge. This also bumps the config generation,
+                            # invalidating candidates still being built from
+                            # the rejected configuration.
+                            try:
+                                runtime_restore_scheduled = (
+                                    schedule_agent_reload(
+                                        request,
+                                        workspace.agent_id,
+                                    )
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Backend config rolled back for agent "
+                                    "'%s' but runtime restore scheduling "
+                                    "failed",
+                                    sanitize_log_value(workspace.agent_id),
+                                )
+                            else:
+                                if not runtime_restore_scheduled:
+                                    logger.error(
+                                        "Backend config rolled back for agent "
+                                        "'%s' but runtime restore could not "
+                                        "be scheduled",
+                                        sanitize_log_value(workspace.agent_id),
+                                    )
+                finally:
+                    selection_lease.release()
+
+            try:
+                reload_scheduled = schedule_agent_reload(
+                    request,
+                    workspace.agent_id,
+                    on_complete=complete_backend_reload,
+                )
+            except BaseException:
+                await run_async_to_completion(complete_backend_reload(False))
+                raise
+            if not reload_scheduled:
+                await complete_backend_reload(False)
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Agent reload could not be scheduled; "
+                        "config rolled back"
+                    ),
+                )
+            lease_handed_off = True
             return agent_config
 
-        agent_config = await run_async_to_completion(
-            persist_apply_and_schedule(),
-        )
+        try:
+            agent_config = await run_async_to_completion(
+                persist_apply_and_schedule(),
+            )
+        finally:
+            if not lease_handed_off:
+                selection_lease.release()
 
     running_config.approval_level = agent_config.approval_level
-    return running_config
+    return _mask_memory_backend_secrets(running_config)
 
 
 @router.get(
@@ -2034,158 +2298,6 @@ async def put_system_prompt_files(
     schedule_agent_reload(request, workspace.agent_id)
 
     return files
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _validate_zip_data(data: bytes, workspace_dir: Path) -> None:
-    """Ensure *data* is a valid zip without path-traversal entries."""
-    if not zipfile.is_zipfile(io.BytesIO(data)):
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file is not a valid zip archive",
-        )
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        for name in zf.namelist():
-            resolved = (workspace_dir / name).resolve()
-            if not str(resolved).startswith(str(workspace_dir)):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Zip contains unsafe path: {name}",
-                )
-
-
-def _extract_and_merge_zip(data: bytes, workspace_dir: Path) -> None:
-    """Extract zip data and merge into workspace_dir (blocking operation)."""
-    tmp_dir = None
-    try:
-        tmp_dir = Path(tempfile.mkdtemp(prefix="qwenpaw_upload_"))
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            zf.extractall(tmp_dir)
-
-        top_entries = list(tmp_dir.iterdir())
-        extract_root = tmp_dir
-        if len(top_entries) == 1 and top_entries[0].is_dir():
-            extract_root = top_entries[0]
-
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-
-        for item in extract_root.iterdir():
-            dest = workspace_dir / item.name
-            if item.is_file():
-                shutil.copy2(item, dest)
-            else:
-                if dest.exists() and dest.is_file():
-                    dest.unlink()
-                shutil.copytree(item, dest, dirs_exist_ok=True)
-    finally:
-        if tmp_dir and tmp_dir.is_dir():
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-def _validate_and_extract_zip(data: bytes, workspace_dir: Path) -> None:
-    """Validate and extract zip data (blocking operation)."""
-    _validate_zip_data(data, workspace_dir)
-    _extract_and_merge_zip(data, workspace_dir)
-
-
-# ---------------------------------------------------------------------------
-# Workspace Download/Upload Endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/download",
-    summary="Download workspace as zip",
-    description=(
-        "Package the entire agent workspace into a zip archive and stream "
-        "it back as a downloadable file."
-    ),
-    responses={
-        200: {
-            "content": {"application/zip": {}},
-            "description": "Zip archive of agent workspace",
-        },
-    },
-)
-async def download_workspace(request: Request):
-    """Stream agent workspace as a zip file."""
-
-    agent = await get_agent_for_request(request)
-    workspace_dir = agent.workspace_dir
-
-    if not workspace_dir.is_dir():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Workspace does not exist: {workspace_dir}",
-        )
-
-    buf = await asyncio.to_thread(_zip_directory, workspace_dir)
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = f"qwenpaw_workspace_{agent.agent_id}_{timestamp}.zip"
-
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        },
-    )
-
-
-@router.post(
-    "/upload",
-    response_model=dict,
-    summary="Upload zip and merge into workspace",
-    description=(
-        "Upload a zip archive.  Paths present in the zip are merged into "
-        "agent workspace (files overwritten, dirs merged).  Paths not in "
-        "the zip are left unchanged (e.g. qwenpaw.db, runtime dirs). "
-        "Download packs the entire workspace; upload only "
-        "overwrites/merges zip contents."
-    ),
-)
-async def upload_workspace(
-    request: Request,
-    file: UploadFile = File(
-        ...,
-        description="Zip archive to merge into agent workspace",
-    ),
-) -> dict:
-    """
-    Merge uploaded zip contents into agent workspace (overwrite, not clear).
-    """
-
-    if file.content_type and file.content_type not in (
-        "application/zip",
-        "application/x-zip-compressed",
-        "application/octet-stream",
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Expected a zip file, got content-type: {file.content_type}"
-            ),
-        )
-
-    agent = await get_agent_for_request(request)
-    workspace_dir = agent.workspace_dir
-    data = await file.read()
-
-    try:
-        await asyncio.to_thread(_validate_and_extract_zip, data, workspace_dir)
-        return {"success": True}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to merge workspace: {exc}",
-        ) from exc
 
 
 @router.get("/commands/available")
