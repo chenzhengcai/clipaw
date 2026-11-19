@@ -22,21 +22,48 @@
  */
 (() => {
   const QwenPaw = window.QwenPaw;
+  // A hot reload evaluates this file again. Dispose the previous instance
+  // instead of leaving a permanent loaded flag that prevents re-registration.
+  const previousRuntime = window.__QWP_BG_THEME_RUNTIME__;
+  if (previousRuntime && typeof previousRuntime.dispose === "function") {
+    previousRuntime.dispose();
+  } else if (
+    window.__QWP_BG_THEME_LOADED__ &&
+    window.__QWP_BG__ &&
+    typeof window.__QWP_BG__.apply === "function"
+  ) {
+    // 0.1.x had no disposer. Its apply(null slots) path removes both layers
+    // and disconnects the observer; the v2 event name below detaches its
+    // anonymous listener from all future updates.
+    window.__QWP_BG__.apply({
+      enabled: false,
+      slots: { global: null, chat: null },
+    });
+    // The legacy style element is not removed by apply(false). Rebuild it so
+    // the v2 selectors (rather than stale CSS) take effect after an upgrade.
+    document.getElementById("qwp-bg-styles")?.remove();
+    document.getElementById("qwp-bg-global-layer")?.remove();
+    document.querySelectorAll(".qwp-chat-bg-layer").forEach((node) => node.remove());
+    document.documentElement.classList.remove("qwp-bg-global-on");
+    document.body.classList.remove(
+      "qwp-bg-enabled",
+      "qwp-bg-global-on",
+      "qwp-chat-bg-on",
+    );
+  }
+  delete window.__QWP_BG_THEME_LOADED__;
+  if (!previousRuntime) delete window.__QWP_BG__;
   if (!QwenPaw || !QwenPaw.host || !QwenPaw.menu || !QwenPaw.route) {
     console.error("[background-theme] window.QwenPaw not ready - cannot register.");
     return;
   }
-  if (window.__QWP_BG_THEME_LOADED__) {
-    return; // idempotent across hot reloads
-  }
-  window.__QWP_BG_THEME_LOADED__ = true;
 
   const host = QwenPaw.host;
   const { React, antd, antdIcons } = host;
   const h = React.createElement;
 
   const PLUGIN_ID = "background-theme";
-  const EVENT_CHANGED = "qwp-bg-config-changed";
+  const EVENT_CHANGED = "qwp-bg-config-changed-v2";
   const GLOBAL_LAYER_ID = "qwp-bg-global-layer";
   const STYLE_ID = "qwp-bg-styles";
   const CHAT_LAYER_CLASS = "qwp-chat-bg-layer";
@@ -200,6 +227,12 @@
     chatSpec: null,
     chatObserver: null,
     chatRafPending: false,
+    chatRafId: null,
+    disposed: false,
+    configRequest: 0,
+    registrations: [],
+    onConfigChanged: null,
+    onPluginsChanged: null,
   };
 
   const STYLE_CSS = `
@@ -235,8 +268,10 @@ html.qwp-bg-global-on body.qwp-bg-global-on #root { background: transparent !imp
 html.qwp-bg-global-on body.qwp-bg-global-on [class*='index-module__footerActions__'] { background: transparent !important; }
 /* Chat input wrapper: solid surface removed while the plugin is on so
    the chat/global background shows through behind the input area. */
-body.qwp-bg-enabled .qwenpaw-chat-anywhere-input-wrapper,
-body.qwp-bg-enabled [class*="chat-anywhere-input-wrapper"] {
+body.qwp-bg-global-on .qwenpaw-chat-anywhere-input-wrapper,
+body.qwp-bg-global-on [class*="chat-anywhere-input-wrapper"],
+body.qwp-chat-bg-on .qwenpaw-chat-anywhere-input-wrapper,
+body.qwp-chat-bg-on [class*="chat-anywhere-input-wrapper"] {
   background: transparent !important;
 }
 /* Chat surfaces: clear their opaque backgrounds so the global background
@@ -452,6 +487,7 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
       return el;
     }
     const url = mediaUrl(spec.url);
+    const absoluteUrl = url ? new URL(url, window.location.href).href : "";
     const tag = spec.type === "video" ? "video" : "img";
     let el = existing;
     if (
@@ -463,7 +499,10 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
       el = document.createElement(tag);
       el.className = "qwp-bg-media";
       el.setAttribute("data-bg-file", spec.file || "");
-      if (url) el.src = url;
+      if (absoluteUrl) {
+        el.src = absoluteUrl;
+        el.setAttribute("data-bg-url", absoluteUrl);
+      }
       if (tag === "video") {
         el.muted = true;
         el.loop = true;
@@ -471,8 +510,14 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
         el.setAttribute("playsinline", "");
         el.play().catch(() => { /* autoplay guard */ });
       }
-    } else if (el.src !== url && url) {
-      el.src = url;
+    } else if (
+      absoluteUrl &&
+      el.getAttribute("data-bg-url") !== absoluteUrl
+    ) {
+      // dim/blur/opacity updates must not reload a playing video. Compare a
+      // normalized URL, not the absolute el.src against a relative API path.
+      el.src = absoluteUrl;
+      el.setAttribute("data-bg-url", absoluteUrl);
       if (tag === "video") el.play().catch(() => { /* ignore */ });
     }
     el.style.objectFit = spec.fit || "cover";
@@ -576,6 +621,10 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
 
   function applyChat(spec) {
     runtime.chatSpec = spec;
+    const active = Boolean(
+      spec && spec.type && (spec.url || spec.type === "color"),
+    );
+    document.body.classList.toggle("qwp-chat-bg-on", active);
     eachChatHost((node) => applyChatToHost(node, spec));
     if (spec && spec.type) {
       startChatObserver();
@@ -587,10 +636,12 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
   function startChatObserver() {
     if (runtime.chatObserver || !document.body) return;
     runtime.chatObserver = new MutationObserver(() => {
-      if (runtime.chatRafPending) return;
+      if (runtime.disposed || runtime.chatRafPending) return;
       runtime.chatRafPending = true;
-      requestAnimationFrame(() => {
+      runtime.chatRafId = requestAnimationFrame(() => {
         runtime.chatRafPending = false;
+        runtime.chatRafId = null;
+        if (runtime.disposed) return;
         const spec = runtime.chatSpec;
         if (!spec || !spec.type) return;
         eachChatHost((node) => {
@@ -611,10 +662,15 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
       runtime.chatObserver.disconnect();
       runtime.chatObserver = null;
     }
+    if (runtime.chatRafId !== null) {
+      cancelAnimationFrame(runtime.chatRafId);
+      runtime.chatRafId = null;
+      runtime.chatRafPending = false;
+    }
   }
 
   function applyConfig(cfg) {
-    if (!cfg || !cfg.slots) return;
+    if (runtime.disposed || !cfg || !cfg.slots) return;
     // Master switch marks the body so plugin-scoped CSS (transparent
     // surfaces, chat input wrapper, …) applies exactly while enabled.
     const enabled = cfg.enabled === true;
@@ -630,21 +686,29 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
   }
 
   function loadAndApply() {
+    if (runtime.disposed) return Promise.resolve(null);
+    const request = ++runtime.configRequest;
     return getConfig()
       .then((cfg) => {
+        // A disable/unload may happen while the request is in flight. Never
+        // let a late response resurrect the background.
+        if (runtime.disposed || request !== runtime.configRequest) return null;
         applyConfig(cfg);
         return cfg;
       })
       .catch((err) => {
-        console.warn(
-          "[background-theme] config load failed:",
-          err && err.message,
-        );
+        if (!runtime.disposed) {
+          console.warn(
+            "[background-theme] config load failed:",
+            err && err.message,
+          );
+        }
         return null;
       });
   }
 
-  window.addEventListener(EVENT_CHANGED, () => loadAndApply());
+  runtime.onConfigChanged = () => loadAndApply();
+  window.addEventListener(EVENT_CHANGED, runtime.onConfigChanged);
 
   // ── Settings page ──────────────────────────────────────────────────────
 
@@ -1357,24 +1421,84 @@ html.dark-mode .${CHAT_LAYER_CLASS} .qwp-bg-overlay { background: rgba(10,10,14,
   const ROUTE_ID = "background-theme.settings";
   const ROUTE_PATH = "/background-settings";
 
-  QwenPaw.menu.add(PLUGIN_ID, {
-    id: MENU_ITEM_ID,
-    location: "primary.settings",
-    parentId: "core.settings-group",
-    label: () => t("menuLabel"),
-    icon: icon(PictureOutlined) || "🖼️",
-    route: ROUTE_ID,
-    order: 95, // between voice-transcription (90) and debug (100)
-  });
+  runtime.registrations.push(
+    QwenPaw.menu.add(PLUGIN_ID, {
+      id: MENU_ITEM_ID,
+      location: "primary.settings",
+      parentId: "core.settings-group",
+      label: () => t("menuLabel"),
+      icon: icon(PictureOutlined) || "🖼️",
+      route: ROUTE_ID,
+      order: 95, // between voice-transcription (90) and debug (100)
+    }),
+    QwenPaw.route.add(PLUGIN_ID, {
+      id: ROUTE_ID,
+      path: ROUTE_PATH,
+      component: BackgroundSettingsPage,
+    }),
+  );
 
-  QwenPaw.route.add(PLUGIN_ID, {
-    id: ROUTE_ID,
-    path: ROUTE_PATH,
-    component: BackgroundSettingsPage,
-  });
+  function dispose() {
+    if (runtime.disposed) return;
+    runtime.disposed = true;
+    runtime.configRequest += 1;
+    if (runtime.onConfigChanged) {
+      window.removeEventListener(EVENT_CHANGED, runtime.onConfigChanged);
+    }
+    if (runtime.onPluginsChanged) {
+      window.removeEventListener("qwenpaw:plugins-changed", runtime.onPluginsChanged);
+    }
+    stopChatObserver();
+    applyGlobal(null);
+    applyChat(null);
+    document.body.classList.remove("qwp-bg-enabled");
+    const style = document.getElementById(STYLE_ID);
+    if (style) style.remove();
+    for (const registration of runtime.registrations.splice(0)) {
+      try {
+        if (registration && typeof registration.dispose === "function") {
+          registration.dispose();
+        }
+      } catch (error) {
+        console.warn("[background-theme] registration cleanup failed:", error);
+      }
+    }
+    delete window.__QWP_BG__;
+    if (window.__QWP_BG_THEME_RUNTIME__ === runtimeHandle) {
+      delete window.__QWP_BG_THEME_RUNTIME__;
+    }
+  }
+
+  // Official loader emits this event for enable/disable/uninstall. The plugin
+  // owns its non-host resources and cleans them without a host-specific hook.
+  runtime.onPluginsChanged = () => {
+    if (runtime.disposed) return;
+    apiFetch("/frontend_plugin")
+      .then((plugins) => {
+        const current = Array.isArray(plugins)
+          ? plugins.find((item) => item.id === PLUGIN_ID)
+          : null;
+        if (
+          !current ||
+          current.enabled === false ||
+          (current.status !== undefined && current.status !== "active")
+        ) {
+          dispose();
+        } else {
+          loadAndApply();
+        }
+      })
+      .catch((error) => {
+        console.warn("[background-theme] lifecycle refresh failed:", error);
+      });
+  };
+  window.addEventListener("qwenpaw:plugins-changed", runtime.onPluginsChanged);
+
+  const runtimeHandle = { dispose };
+  window.__QWP_BG_THEME_RUNTIME__ = runtimeHandle;
 
   // Debug handle (console: __QWP_BG__.reload())
-  window.__QWP_BG__ = { reload: loadAndApply, apply: applyConfig };
+  window.__QWP_BG__ = { reload: loadAndApply, apply: applyConfig, dispose };
 
   // Boot the background engine on every page.
   loadAndApply();

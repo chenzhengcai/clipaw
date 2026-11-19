@@ -125,6 +125,44 @@ async def test_upload_rejects_unsupported_type(api_client):
         assert resp.status_code == 400
 
 
+async def test_upload_rejects_svg_instead_of_creating_unusable_suffix(api_client, _use_tmp_storage):
+    async with api_client:
+        resp = await api_client.post(
+            "/api/background-theme/library",
+            files={"file": ("vector.svg", b"<svg/>", "image/svg+xml")},
+        )
+        assert resp.status_code == 400
+        library = _use_tmp_storage["library_dir"]
+        if library.exists():
+            assert list(library.glob("*.svg*")) == []
+
+
+async def test_upload_without_extension_uses_allowed_mime_suffix(api_client):
+    async with api_client:
+        resp = await api_client.post(
+            "/api/background-theme/library",
+            files={"file": ("wallpaper", b"jpeg-data", "image/jpeg")},
+        )
+        assert resp.status_code == 200, resp.text
+        item = resp.json()
+        assert item["name"].endswith(".jpg")
+        listed = await api_client.get("/api/background-theme/library")
+        assert [row["name"] for row in listed.json()["items"]] == [item["name"]]
+
+
+async def test_streaming_upload_limit_leaves_no_partial_file(api_client, monkeypatch, _use_tmp_storage):
+    monkeypatch.setattr(bg_plugin, "MAX_UPLOAD_BYTES", 4)
+    async with api_client:
+        resp = await api_client.post(
+            "/api/background-theme/library",
+            files={"file": ("large.png", b"too-large", "image/png")},
+        )
+        assert resp.status_code == 413
+        library = _use_tmp_storage["library_dir"]
+        if library.exists():
+            assert not any(library.iterdir())
+
+
 async def test_delete_clears_config_reference(api_client, _use_tmp_storage):
     async with api_client:
         item = await _upload(api_client, "bg.jpg")
@@ -405,3 +443,21 @@ async def test_clear_config(api_client, _use_tmp_storage):
         )
         assert cleared.status_code == 200
         assert cleared.json()["slots"]["global"]["type"] is None
+
+
+def test_legacy_media_migrates_into_new_empty_library(tmp_path: Path):
+    legacy = tmp_path / "legacy" / "data"
+    legacy_library = legacy / "library"
+    legacy_library.mkdir(parents=True)
+    (legacy_library / "old.png").write_bytes(b"old-image")
+    target_library = tmp_path / "target" / "library"
+    with (
+        patch.object(bg_plugin, "_LEGACY_DATA_DIR", legacy),
+        patch.object(bg_plugin, "_DATA_DIR", tmp_path / "target"),
+        patch.object(bg_plugin, "_LIBRARY_DIR", target_library),
+        patch.object(bg_plugin, "_CONFIG_FILE", tmp_path / "target" / "config.json"),
+    ):
+        bg_plugin._migrate_legacy_data()
+
+    assert (target_library / "old.png").read_bytes() == b"old-image"
+    assert not (legacy_library / "old.png").exists()

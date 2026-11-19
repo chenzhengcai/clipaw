@@ -4,7 +4,6 @@ import asyncio
 import inspect
 import mimetypes
 import os
-import shutil
 import stat
 import sys
 import threading
@@ -92,97 +91,11 @@ mimetypes.add_type("image/svg+xml", ".svg")
 load_envs_into_environ()
 
 
-# Bundled plugins shipped in the source tree under plugins/apps/.
-# Copied into the runtime plugins dir on startup so they are available
-# without a manual `qwenpaw plugin install` step.
-_BUNDLED_PLUGIN_IDS = ["background-theme", "qwenpaw-voice"]
-
-
-def _bundled_plugins_root() -> Path | None:
-    """Return the ``plugins/apps`` directory shipped alongside the package.
-
-    In a source checkout (editable install) the directory lives at
-    ``<repo>/plugins/apps``.  In a wheel/sdist it may be inside the
-    package tree.  Returns ``None`` when not found (e.g. pip-installed
-    without bundled plugins).
-    """
-    here = Path(__file__).resolve()
-    for ancestor in here.parents:
-        candidate = ancestor / "plugins" / "apps"
-        if candidate.is_dir():
-            return candidate
-    return None
-
-
-def _read_plugin_version(plugin_dir: Path) -> str | None:
-    """Best-effort read of a plugin's manifest version."""
-    try:
-        import json
-
-        manifest = json.loads(
-            (plugin_dir / "plugin.json").read_text("utf-8"),
-        )
-        return str(manifest.get("version") or "")
-    except Exception:
-        return None
-
-
 def _sync_bundled_plugins(plugins_dir: Path) -> None:
-    """Copy bundled plugins into the runtime plugins directory.
+    """Run the generic opt-in bundled-app synchronization."""
+    from ..plugins.bundled_apps import sync_bundled_apps
 
-    A target is re-synced when its manifest version differs from the
-    bundled source (so source updates reach the runtime even without a
-    version-file wipe).  Dev artifacts (node_modules, ``__pycache__``,
-    sourcemaps) are excluded — the runtime only needs the built bundle.
-    """
-    root = _bundled_plugins_root()
-    if root is None:
-        return
-    ignore = shutil.ignore_patterns(
-        "node_modules",
-        "__pycache__",
-        "*.pyc",
-        ".DS_Store",
-        ".pytest_cache",
-    )
-    for plugin_id in _BUNDLED_PLUGIN_IDS:
-        source = root / plugin_id
-        if not source.is_dir():
-            continue
-        target = plugins_dir / plugin_id
-        if target.exists():
-            src_version = _read_plugin_version(source)
-            tgt_version = _read_plugin_version(target)
-            if src_version and src_version == tgt_version:
-                continue
-            # Version drift (or unreadable manifest) → replace wholesale.
-            # ``ignore_errors`` keeps a partially-locked tree from aborting
-            # startup; the ``dirs_exist_ok`` copy below then overwrites
-            # whatever survived, so the sync still converges.
-            shutil.rmtree(target, ignore_errors=True)
-            if target.exists():
-                logger.warning(
-                    "Could not fully remove stale bundled plugin '%s'; "
-                    "overwriting in place",
-                    plugin_id,
-                )
-        try:
-            plugins_dir.mkdir(parents=True, exist_ok=True)
-            # dirs_exist_ok so a partially-removed target still converges.
-            shutil.copytree(source, target, ignore=ignore, dirs_exist_ok=True)
-            logger.info(
-                "Installed bundled plugin '%s' (v%s) to %s",
-                plugin_id,
-                _read_plugin_version(source) or "?",
-                target,
-            )
-        except Exception as exc:  # noqa: BLE001 - must not block startup
-            logger.warning(
-                "Failed to sync bundled plugin '%s': %s",
-                plugin_id,
-                exc,
-                exc_info=True,
-            )
+    sync_bundled_apps(plugins_dir)
 
 
 async def _shutdown_plugins(app: FastAPI) -> None:
@@ -605,10 +518,8 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
             from ..plugins.loader import PluginLoader
             from ..plugins.runtime import RuntimeHelpers
 
-            # Sync bundled plugins shipped under <repo>/plugins/apps/ into
-            # the runtime plugins dir so they are auto-loaded on startup.
-            # This makes background-theme and the qwenpaw-voice plugin
-            # available without a manual `qwenpaw plugin install`.
+            # Sync plugins that opt in through their own manifests. Disable
+            # and uninstall choices are preserved by the generic synchronizer.
             _sync_bundled_plugins(get_plugins_dir())
 
             # PawApps install into the plugins dir alongside other plugins

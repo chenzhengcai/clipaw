@@ -86,6 +86,11 @@ datas = [
     (str(SRC / src), dst) for src, dst in _data_dirs if (SRC / src).is_dir()
 ]
 datas.append((str(REPO_ROOT / "plugins/hub"), "qwenpaw/plugins/bundled/hub"))
+# Manifest-opted desktop apps remain readable plugin files at runtime. The
+# generic startup synchronizer copies them to the user's plugins directory.
+datas += runpy.run_path(str(Path(SPECPATH) / "app_plugins.py"))[
+    "collect_bundled_app_data"
+](REPO_ROOT)
 datas += collect_tree(CONSOLE_DIST, "qwenpaw/console")
 datas.append(
     (

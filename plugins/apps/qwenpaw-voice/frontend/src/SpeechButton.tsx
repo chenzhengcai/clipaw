@@ -11,7 +11,7 @@
  */
 import { useTranslation } from "./i18n";
 import { getHost } from "./host";
-import { isVoiceConnected } from "./config";
+import { VOICE_ENABLED_CHANGE_EVENT, isVoiceConnected } from "./config";
 
 const { React, antd, antdIcons } = getHost();
 const { Tooltip, message, Button } = antd;
@@ -23,6 +23,7 @@ const {
   useState,
   forwardRef,
   useImperativeHandle,
+  useEffect,
 } = React;
 
 const MAX_RECORDING_DURATION_MS = 5 * 60 * 1000; // 5 minutes
@@ -102,7 +103,6 @@ const RecordingIcon: React.FC<{ className?: string }> = ({ className }) => (
   </svg>
 );
 
-
 // Mic glyph — byte-for-byte identical to the official WhisperSpeechButton
 // icon: the console already ships the global `.spark-icon` CSS from
 // @agentscope-ai/icons, so we reuse the very same classes and data attribute
@@ -136,7 +136,8 @@ const MicIcon: React.FC = () => (
 /** Build ws:// or wss:// URL from the REST API base. */
 function getWsUrl(path: string): string {
   const apiUrl = getHost().getApiUrl(path);
-  if (apiUrl.startsWith("https://")) return apiUrl.replace("https://", "wss://");
+  if (apiUrl.startsWith("https://"))
+    return apiUrl.replace("https://", "wss://");
   if (apiUrl.startsWith("http://")) return apiUrl.replace("http://", "ws://");
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}${apiUrl}`;
@@ -185,6 +186,8 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
     const { t } = useTranslation();
     const [recording, setRecording] = useState(false);
     const [loading, setLoading] = useState(false);
+    const loadingRef = useRef(false);
+    const startingRef = useRef(false);
     const wsRef = useRef<WebSocket | null>(null);
     const audioCtxRef = useRef<AudioContext | null>(null);
     const processorRef = useRef<ScriptProcessorNode | null>(null);
@@ -194,6 +197,30 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
       null,
     );
     const finalTextRef = useRef("");
+
+    // Connection state lives in localStorage and is restored asynchronously
+    // from the plugin backend (Tauri changes port per launch, so the first
+    // render can still be "not connected").  Track it in state, otherwise the
+    // button would stay disabled until an unrelated re-render happens.
+    const [voiceConnected, setVoiceConnected] = useState(isVoiceConnected);
+
+    useEffect(() => {
+      const sync = () => {
+        const next = isVoiceConnected();
+        setVoiceConnected((prev) => (prev === next ? prev : next));
+      };
+      const id = setInterval(sync, 1000);
+      window.addEventListener(VOICE_ENABLED_CHANGE_EVENT, sync);
+      return () => {
+        clearInterval(id);
+        window.removeEventListener(VOICE_ENABLED_CHANGE_EVENT, sync);
+      };
+    }, []);
+
+    const updateLoading = useCallback((value: boolean) => {
+      loadingRef.current = value;
+      setLoading(value);
+    }, []);
 
     const cleanup = useCallback(() => {
       if (recordingTimerRef.current) {
@@ -220,31 +247,36 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
         streamRef.current.getTracks().forEach((tr) => tr.stop());
         streamRef.current = null;
       }
-      if (wsRef.current) {
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) {
+        // Prevent a stale onclose from affecting a newer recording session.
+        ws.onopen = null;
+        ws.onmessage = null;
         try {
-          if (wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send("DONE");
-          }
+          if (ws.readyState === WebSocket.OPEN) ws.send("DONE");
         } catch {
           /* ignore */
         }
         try {
-          wsRef.current.close();
+          ws.close();
         } catch {
           /* ignore */
         }
-        wsRef.current = null;
       }
       internalRecordingRef.current = false;
+      startingRef.current = false;
       setRecording(false);
-      setLoading(false);
-    }, []);
+      updateLoading(false);
+    }, [updateLoading]);
+
+    useEffect(() => cleanup, [cleanup]);
 
     const stopRecording = useCallback(() => {
       if (internalRecordingRef.current) {
         internalRecordingRef.current = false;
         setRecording(false);
-        setLoading(true);
+        updateLoading(true);
         if (processorRef.current) {
           try {
             processorRef.current.disconnect();
@@ -273,12 +305,14 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
           wsRef.current.send("DONE");
         }
       }
-    }, []);
+    }, [updateLoading]);
 
     const startRecording = useCallback(async () => {
-      if (internalRecordingRef.current || loading) return;
+      if (internalRecordingRef.current || loadingRef.current) return;
 
+      startingRef.current = true;
       onStart?.();
+      updateLoading(true);
 
       try {
         const wsUrl = getWsUrl("/qwenpaw-voice/transcribe/ws");
@@ -286,6 +320,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
         ws.binaryType = "arraybuffer";
 
         ws.onopen = async () => {
+          if (wsRef.current !== ws) return;
           try {
             const stream = await navigator.mediaDevices.getUserMedia({
               audio: {
@@ -293,6 +328,10 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
                 sampleRate: { ideal: TARGET_SAMPLE_RATE },
               },
             });
+            if (wsRef.current !== ws) {
+              stream.getTracks().forEach((track) => track.stop());
+              return;
+            }
             streamRef.current = stream;
 
             const audioCtx = new AudioContext({
@@ -319,7 +358,9 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
             processor.connect(audioCtx.destination);
 
             internalRecordingRef.current = true;
+            startingRef.current = false;
             setRecording(true);
+            updateLoading(false);
 
             recordingTimerRef.current = setTimeout(() => {
               if (internalRecordingRef.current) {
@@ -338,6 +379,8 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
           }
         };
 
+        let hadFinal = false;
+
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data as string);
@@ -345,6 +388,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
               onTranscription(data.text, true);
               finalTextRef.current = data.text;
             } else if (data.type === "final") {
+              hadFinal = true;
               if (data.text) {
                 onTranscription(data.text, false);
                 finalTextRef.current = data.text;
@@ -361,17 +405,19 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
           }
         };
 
-        let hadError = false;
-
-        ws.onerror = () => {
-          hadError = true;
-        };
-
         ws.onclose = () => {
-          if (loading) {
+          // Only act for the active session; stale handlers from a prior
+          // recording are no-ops because wsRef was cleared in cleanup.
+          if (wsRef.current !== ws) {
+            cleanup();
+            return;
+          }
+          if (loadingRef.current && !hadFinal) {
             if (finalTextRef.current) {
+              // Server closed without a formal final frame but we received
+              // partial text — use it rather than reporting an error.
               onTranscription(finalTextRef.current, false);
-            } else if (hadError) {
+            } else {
               message.error(t("transcriptionFailed"));
             }
           }
@@ -384,21 +430,29 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
         message.error(t("microphoneError"));
         cleanup();
       }
-    }, [onTranscription, t, loading, stopRecording, cleanup]);
+    }, [onTranscription, onStart, t, stopRecording, cleanup, updateLoading]);
 
     const toggleRecording = useCallback(() => {
-      if (loading) return;
+      if (!isVoiceConnected()) {
+        message.warning(t("notConnected"));
+        return;
+      }
+      if (startingRef.current) {
+        cleanup();
+        return;
+      }
+      if (loadingRef.current) return;
       if (internalRecordingRef.current) {
         stopRecording();
       } else {
         finalTextRef.current = "";
-        startRecording();
+        void startRecording();
       }
-    }, [loading, startRecording, stopRecording]);
+    }, [startRecording, stopRecording, cleanup, t]);
 
     const resetSession = useCallback(() => {
+      finalTextRef.current = "";
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        finalTextRef.current = "";
         wsRef.current.send("RESET");
       }
     }, []);
@@ -407,15 +461,19 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
       ref,
       () => ({
         toggleRecording,
-        isRecording: () => internalRecordingRef.current,
-        isLoading: () => loading,
+        isRecording: () => internalRecordingRef.current || startingRef.current,
+        isLoading: () => loadingRef.current,
         resetSession,
       }),
-      [toggleRecording, loading, resetSession],
+      [toggleRecording, resetSession],
     );
 
-    const voiceConnected = isVoiceConnected();
-    const isDisabled = disabled || loading || !voiceConnected;
+    const isDisabled = disabled || loadingRef.current || !voiceConnected;
+    const accessibleLabel = loading
+      ? t("transcribing")
+      : recording
+      ? t("stopRecording")
+      : t("startRecording");
 
     return (
       <Tooltip
@@ -423,15 +481,16 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
           !voiceConnected
             ? t("notConnected")
             : loading
-              ? t("transcribing")
-              : recording
-                ? t("stopRecording")
-                : t("startRecording")
+            ? t("transcribing")
+            : recording
+            ? t("stopRecording")
+            : t("startRecording")
         }
         mouseEnterDelay={0.5}
       >
         <Button
           type="text"
+          aria-label={accessibleLabel}
           // Same classes as the official WhisperSpeechButton:
           // - qwenpaw-sender-actions-btn → Chat's less scopes
           //   [class$="-sender-actions-btn"] to 44×44 / radius 12px (this is

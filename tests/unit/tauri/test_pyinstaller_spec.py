@@ -184,7 +184,7 @@ def test_desktop_spec_reaches_analysis_without_vendor_sdks(
     staged_root = tmp_path / "repo"
     staged_pack = staged_root / "scripts" / "pack-tauri"
     staged_pack.mkdir(parents=True)
-    for name in ("qwenpaw.spec", "collect_runtime_metadata.py"):
+    for name in ("qwenpaw.spec", "collect_runtime_metadata.py", "app_plugins.py"):
         (staged_pack / name).symlink_to(SPEC_PATH.parent / name)
     for name in ("src", "packages", "plugins"):
         (staged_root / name).symlink_to(

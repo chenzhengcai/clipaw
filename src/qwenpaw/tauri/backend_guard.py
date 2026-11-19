@@ -79,6 +79,9 @@ class BackendInstance:
                     "token": self.token,
                     "port": port,
                     "mode": self.mode,
+                    # Lets a quitting desktop stop a backend whose supervisor
+                    # is gone instead of leaving it running in the background.
+                    "pid": os.getpid(),
                 },
                 stream,
             )

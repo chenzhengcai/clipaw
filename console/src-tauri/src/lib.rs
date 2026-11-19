@@ -160,6 +160,10 @@ pub fn run() {
                 RunEvent::Reopen { .. } => {
                     tray::show_main_window(app_handle);
                 }
+                // Covers exits that bypass `exit_app` — AppKit's `terminate:`
+                // from the Dock menu, an AppleScript quit, or Cmd+Q if the Quit
+                // menu item could not be replaced.
+                RunEvent::Exit => tray::finish_exit(app_handle),
                 _ => {}
             });
         }

@@ -1,7 +1,7 @@
 {
   "id": "background-theme",
   "name": "背景设置",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "上传图片或视频作为软件全局背景与聊天对话背景,支持历史背景管理、遮罩/模糊等效果调节。",
   "description_i18n": {
     "zh-CN": "上传图片或视频作为软件全局背景与聊天对话背景,支持历史背景管理、遮罩/模糊等效果调节。",
@@ -17,6 +17,10 @@
     "min": "2.0.1"
   },
   "meta": {
+    "desktop": {
+      "bundle": true,
+      "auto_start": true
+    },
     "category": "personalization",
     "permissions": {
       "chat": false,

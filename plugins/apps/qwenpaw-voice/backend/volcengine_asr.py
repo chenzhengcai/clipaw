@@ -44,6 +44,8 @@ _VOLC_COMP_NONE = 0b0000  # no compression
 
 # Audio chunk size: 200ms of 16kHz 16bit mono PCM = 6400 bytes
 _VOLC_CHUNK_SIZE = 6400
+_VOLC_QUEUE_MAX = 50
+_VOLC_FINAL_TIMEOUT_S = 25.0
 
 
 def _build_volc_frame(
@@ -75,26 +77,27 @@ def _build_volc_frame(
 
 
 def _parse_volc_frame(raw: bytes) -> Optional[dict]:
-    """Parse a Volcengine BigModel server response frame.
-
-    Returns a dict ``{"type": "result", "text": "..."}`` or
-    ``{"type": "error", "code": N, "message": "..."}``,
-    or ``None`` if the frame is unrecognised / too short.
-    """
+    """Parse one server frame, including gzip and final-frame markers."""
     if len(raw) < 8:
         return None
 
+    header_size = (raw[0] & 0x0F) * 4
+    if header_size < 4 or len(raw) < header_size + 4:
+        return None
     msg_type = (raw[1] >> 4) & 0x0F
     flags = raw[1] & 0x0F
-    offset = 4
+    compression = raw[2] & 0x0F
+    offset = header_size
 
     if msg_type == _VOLC_MSG_ERROR:
+        # Error responses carry code + message size + message directly.
         if len(raw) < offset + 8:
             return None
         error_code = struct.unpack(">I", raw[offset : offset + 4])[0]
-        offset += 4
-        error_size = struct.unpack(">I", raw[offset : offset + 4])[0]
-        offset += 4
+        error_size = struct.unpack(">I", raw[offset + 4 : offset + 8])[0]
+        offset += 8
+        if len(raw) < offset + error_size:
+            return None
         error_msg = raw[offset : offset + error_size].decode(
             "utf-8", errors="replace",
         )
@@ -103,28 +106,45 @@ def _parse_volc_frame(raw: bytes) -> Optional[dict]:
     if msg_type != _VOLC_MSG_SERVER_RESP:
         return None
 
-    # Skip optional sequence number
+    sequence = None
     if flags & 0b0001:
+        if len(raw) < offset + 4:
+            return None
+        sequence = struct.unpack(">i", raw[offset : offset + 4])[0]
         offset += 4
-
     if len(raw) < offset + 4:
         return None
     payload_size = struct.unpack(">I", raw[offset : offset + 4])[0]
     offset += 4
-
-    if len(raw) < offset + payload_size:
+    if payload_size > 2**23 or len(raw) < offset + payload_size:
         return None
     payload = raw[offset : offset + payload_size]
+
+    if compression == 1:
+        import gzip
+
+        try:
+            payload = gzip.decompress(payload)
+        except (OSError, EOFError):
+            logger.debug("Volcengine ASR: invalid gzip response")
+            return None
+    elif compression != 0:
+        logger.debug("Volcengine ASR: unsupported compression %d", compression)
+        return None
 
     try:
         data = _json.loads(payload.decode("utf-8"))
     except (_json.JSONDecodeError, UnicodeDecodeError):
         logger.debug("Volcengine ASR: failed to decode response JSON")
         return None
-
+    if not isinstance(data, dict):
+        return None
     result = data.get("result", {})
-    text = result.get("text", "")
-    return {"type": "result", "text": text}
+    text = result.get("text", "") if isinstance(result, dict) else ""
+    is_final = bool(flags & _VOLC_FLAG_LAST_PKT) or (
+        sequence is not None and sequence < 0
+    )
+    return {"type": "result", "text": text, "is_final": is_final}
 
 
 def _convert_to_pcm16k(file_path: str) -> str:
@@ -171,14 +191,11 @@ def _convert_to_pcm16k(file_path: str) -> str:
 
 
 def _build_volcengine_ssl_ctx() -> "ssl.SSLContext":
-    """Build an SSL context that skips certificate verification.
-
-    Desktop apps often run behind corporate proxies that inject
-    self-signed certificates, causing default verification to fail.
-    """
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    """Build a verified TLS context, optionally trusting an enterprise CA."""
+    ctx = ssl.create_default_context()
+    ca_file = os.environ.get("VOLCENGINE_ASR_CA_FILE")
+    if ca_file:
+        ctx.load_verify_locations(cafile=ca_file)
     return ctx
 
 
@@ -351,19 +368,20 @@ async def test_volcengine_connection(
             )
             await ws.send(end_frame)
 
-            # Read a response — any non-error means success
+            # Only a valid non-error server response proves connectivity.
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=8.0)
-                parsed = _parse_volc_frame(raw)
-                if parsed and parsed["type"] == "error":
-                    return {
-                        "ok": False,
-                        "error": f"Server error: {parsed.get('message', 'unknown')}",
-                    }
-                return {"ok": True}
             except asyncio.TimeoutError:
-                # No response but no error either — connection itself is OK
-                return {"ok": True}
+                return {"ok": False, "error": "Timed out waiting for ASR response"}
+            parsed = _parse_volc_frame(raw)
+            if parsed is None:
+                return {"ok": False, "error": "Invalid ASR response"}
+            if parsed["type"] == "error":
+                return {
+                    "ok": False,
+                    "error": f"Server error: {parsed.get('message', 'unknown')}",
+                }
+            return {"ok": True}
 
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -404,10 +422,11 @@ async def stream_transcribe_volcengine(
         api_key, resource_id, app_id, access_token,
     )
 
-    audio_queue: asyncio.Queue = asyncio.Queue()
+    audio_queue: asyncio.Queue = asyncio.Queue(maxsize=_VOLC_QUEUE_MAX)
 
     async def _run():
         """Background task: drive the Volcengine WebSocket."""
+        receive_task: Optional[asyncio.Task] = None
         try:
             async with websockets.connect(
                 _VOLC_WS_URL,
@@ -421,10 +440,10 @@ async def stream_transcribe_volcengine(
                 logger.debug("Volcengine streaming: sent full client request")
 
                 full_text = ""
-                receive_task: Optional[asyncio.Task] = None
+                failed = False
 
                 async def _recv_loop():
-                    nonlocal full_text
+                    nonlocal full_text, failed
                     while True:
                         try:
                             raw = await asyncio.wait_for(
@@ -432,12 +451,16 @@ async def stream_transcribe_volcengine(
                             )
                         except asyncio.TimeoutError:
                             continue
-                        except websockets.exceptions.ConnectionClosedOK:
+                        except (
+                            websockets.exceptions.ConnectionClosedOK,
+                            websockets.exceptions.ConnectionClosedError,
+                        ):
                             break
                         parsed = _parse_volc_frame(raw)
                         if parsed is None:
                             continue
                         if parsed["type"] == "error":
+                            failed = True
                             await on_error(
                                 f"ASR error: {parsed.get('message', 'unknown')}",
                             )
@@ -446,6 +469,8 @@ async def stream_transcribe_volcengine(
                         if text and text != full_text:
                             full_text = text
                             await on_text(text)
+                        if parsed.get("is_final"):
+                            return
 
                 receive_task = asyncio.ensure_future(_recv_loop())
 
@@ -473,14 +498,19 @@ async def stream_transcribe_volcengine(
                     )
                     await ws.send(frame)
 
-                # Wait for receiver to finish
+                # Wait for receiver to finish, then always reclaim the task.
                 if receive_task:
                     try:
                         await asyncio.wait_for(receive_task, timeout=20.0)
                     except asyncio.TimeoutError:
                         receive_task.cancel()
+                        try:
+                            await receive_task
+                        except asyncio.CancelledError:
+                            pass
 
-                await on_done(full_text.strip())
+                if not failed:
+                    await on_done(full_text.strip())
 
         except websockets.exceptions.InvalidStatus as exc:
             logger.warning(
@@ -496,15 +526,39 @@ async def stream_transcribe_volcengine(
                 exc_info=True,
             )
             await on_error("Streaming transcription failed")
+        finally:
+            if receive_task is not None:
+                if not receive_task.done():
+                    receive_task.cancel()
+                try:
+                    await receive_task
+                except asyncio.CancelledError:
+                    pass
 
     task = asyncio.ensure_future(_run())
 
-    async def _finish():
-        """Wait for the background task to complete, then clean up."""
-        if not task.done():
-            task.cancel()
+    async def _finish(cancel: bool = False):
+        """Drain a normal DONE, or abort on disconnect/reset/shutdown."""
+        if cancel:
+            if not task.done():
+                task.cancel()
             try:
                 await task
+            except asyncio.CancelledError:
+                pass
+            return
+        if not task.done():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task), timeout=_VOLC_FINAL_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                await on_error("Timed out waiting for final transcription")
             except asyncio.CancelledError:
                 pass
 

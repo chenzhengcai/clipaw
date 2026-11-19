@@ -9,6 +9,14 @@ use std::os::windows::process::CommandExt;
 
 const TOKEN_HEADER: &str = "X-QwenPaw-Control-Token";
 
+/// How long a quit waits for the backend to finish its own shutdown before the
+/// supervisor is asked to terminate it. Healthy shutdowns take a few seconds.
+const GRACEFUL_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long each escalation step waits for the backend lifetime locks to be
+/// released. Bounds the time a quit can spend cleaning up.
+const FORCED_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone, Deserialize)]
 pub(crate) struct Runtime {
     protocol: u32,
@@ -17,6 +25,10 @@ pub(crate) struct Runtime {
     token: String,
     pub port: u16,
     mode: String,
+    /// Backend PID, published so an unresponsive backend can still be stopped
+    /// when its supervisor is gone. Older runtimes do not publish it.
+    #[serde(default)]
+    pid: Option<u32>,
     #[serde(skip)]
     client_id: String,
     #[serde(skip)]
@@ -49,20 +61,86 @@ impl Runtime {
     }
 
     pub async fn stop(&self) -> Result<File, String> {
-        let operation = lock_file(self.directory.join("launch.lock"))?;
-        let deadline = std::time::Instant::now();
-        while !try_lock(&operation)? {
-            if deadline.elapsed() >= Duration::from_secs(5) {
-                return Err("Runtime startup is in progress; try stopping again shortly".into());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        let operation = self.acquire_launch_lock().await?;
         self.stop_locked().await?;
         Ok(operation)
     }
 
-    /// The caller holds launch.lock throughout shutdown and replacement.
-    async fn stop_locked(&self) -> Result<(), String> {
+    /// Stop the backend as part of quitting the desktop.
+    ///
+    /// Unlike [`Runtime::stop`], which trusts a slow but healthy backend, this
+    /// escalates when the backend cannot finish its own teardown, so quitting
+    /// never leaves an orphaned supervisor or backend behind.
+    pub async fn stop_for_exit(&self) -> Result<(), String> {
+        self.stop_with_escalation(GRACEFUL_EXIT_TIMEOUT, FORCED_EXIT_TIMEOUT)
+            .await
+    }
+
+    /// [`Runtime::stop_for_exit`] with explicit escalation timeouts.
+    async fn stop_with_escalation(&self, grace: Duration, forced: Duration) -> Result<(), String> {
+        let _operation = self.acquire_launch_lock().await?;
+        if let Err(error) = self.request_shutdown().await {
+            if error == super::OTHER_CLIENTS_ERROR {
+                return Err(error);
+            }
+            // A backend that hung after its own teardown no longer answers.
+            log::warn!("[backend] shutdown request failed: {error}");
+            match self.other_clients().await {
+                // Still reachable and idle: retry once before escalating.
+                Ok(0) => {
+                    if let Err(retry) = self.request_shutdown().await {
+                        if retry == super::OTHER_CLIENTS_ERROR {
+                            return Err(retry);
+                        }
+                    }
+                }
+                Ok(_) => return Err(super::OTHER_CLIENTS_ERROR.into()),
+                Err(_) => {}
+            }
+        }
+        if self.wait_released(grace).await? {
+            return Ok(());
+        }
+        log::warn!(
+            "[backend] graceful shutdown exceeded {}ms; terminating the backend",
+            grace.as_millis()
+        );
+        // The supervisor watches this file, so a backend stuck in its own
+        // teardown is terminated instead of surviving the desktop.
+        let _ = std::fs::write(self.directory.join("force-stop"), &self.instance);
+        if self.wait_released(forced).await? {
+            return Ok(());
+        }
+        // The supervisor may be gone already; stop the backend directly. The
+        // supervisor launches it as a process-group leader, so the browser
+        // workers it spawned go down with it.
+        match self.pid {
+            Some(pid) if is_backend_process(pid) => {
+                log::warn!("[backend] supervisor unresponsive; killing backend pid={pid}");
+                terminate_process_group(pid);
+            }
+            Some(pid) => log::warn!("[backend] published backend pid={pid} is stale"),
+            None => log::warn!("[backend] running backend did not publish a pid"),
+        }
+        if self.wait_released(forced).await? {
+            return Ok(());
+        }
+        Err("The backend did not stop and may still be running".into())
+    }
+
+    async fn acquire_launch_lock(&self) -> Result<File, String> {
+        let operation = lock_file(self.directory.join("launch.lock"))?;
+        let started = std::time::Instant::now();
+        while !try_lock(&operation)? {
+            if started.elapsed() >= Duration::from_secs(5) {
+                return Err("Runtime startup is in progress; try stopping again shortly".into());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Ok(operation)
+    }
+
+    async fn request_shutdown(&self) -> Result<(), String> {
         let response = client()?
             .post(format!(
                 "http://127.0.0.1:{}/api/runtime/shutdown",
@@ -82,19 +160,100 @@ impl Runtime {
         if response.status() != reqwest::StatusCode::SERVICE_UNAVAILABLE {
             response.error_for_status().map_err(|err| err.to_string())?;
         }
+        Ok(())
+    }
+
+    /// Wait until both lifetime leases are released.
+    ///
+    /// A supervisor can have exited while Python is still alive, so both files
+    /// must be free before the backend counts as stopped.
+    async fn wait_released(&self, timeout: Duration) -> Result<bool, String> {
         let started = std::time::Instant::now();
-        // A supervisor can have exited while Python is still alive. Both
-        // leases must be released before replacing the bundled runtime files.
-        for name in ["daemon.lock", "runtime.lock"] {
-            let lock = lock_file(self.directory.join(name))?;
-            while !try_lock(&lock)? {
-                if started.elapsed() >= Duration::from_secs(60) {
-                    return Err("Runtime did not finish shutting down within 60 seconds".into());
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+        loop {
+            let daemon = lock_file(self.directory.join("daemon.lock"))?;
+            let runtime = lock_file(self.directory.join("runtime.lock"))?;
+            if try_lock(&daemon)? && try_lock(&runtime)? {
+                return Ok(true);
             }
+            if started.elapsed() >= timeout {
+                return Ok(false);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// The caller holds launch.lock throughout shutdown and replacement.
+    async fn stop_locked(&self) -> Result<(), String> {
+        self.request_shutdown().await?;
+        if !self.wait_released(Duration::from_secs(60)).await? {
+            return Err("Runtime did not finish shutting down within 60 seconds".into());
         }
         Ok(())
+    }
+}
+
+/// Terminate the backend process group.
+///
+/// The supervisor launches the backend with `process_group(0)`, so the backend
+/// PID is also the process-group id and signalling the group stops the browser
+/// workers the backend spawned.
+#[cfg(unix)]
+fn terminate_process_group(pid: u32) {
+    let Ok(pid) = i32::try_from(pid) else {
+        return;
+    };
+    if unsafe { libc::kill(-pid, libc::SIGKILL) } != 0 {
+        let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_process_group(_pid: u32) {}
+
+/// Confirm a published pid still belongs to a backend before signalling it.
+///
+/// A backend that was killed leaves `runtime.json` behind, and its pid may have
+/// been reused, so an unverified `SIGKILL` could hit an unrelated process.
+#[cfg(unix)]
+fn is_backend_process(pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .map(|output| {
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .to_ascii_lowercase()
+                    .contains("qwenpaw")
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_backend_process(_pid: u32) -> bool {
+    false
+}
+
+/// Wait for a supervisor that is still starting a backend to publish it.
+///
+/// Quitting while the backend is starting must not leave it running: the
+/// desktop waits for the runtime record so it can stop it like any other.
+pub(crate) async fn wait_for_runtime(
+    directory: &std::path::Path,
+    timeout: Duration,
+) -> Option<Runtime> {
+    let started = std::time::Instant::now();
+    loop {
+        match Runtime::read(directory) {
+            Ok(Some(runtime)) => return Some(runtime),
+            // No supervisor and no backend: nothing is starting.
+            Ok(None) => return None,
+            Err(error) => log::debug!("[backend] runtime is still starting: {error}"),
+        }
+        if started.elapsed() >= timeout {
+            log::warn!("[backend] timed out waiting for the starting runtime");
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -471,5 +630,159 @@ impl Runtime {
             installation.to_string_lossy().as_bytes(),
         )
         .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Runtime;
+    use std::path::Path;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    fn parse(json: &str) -> Runtime {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn published_runtime_exposes_the_backend_pid() {
+        let runtime = parse(
+            r#"{"protocol":1,"version":"2.3.1","instance":"i","token":"t",
+                "port":50013,"mode":"shared","pid":4242}"#,
+        );
+        assert_eq!(runtime.pid, Some(4242));
+    }
+
+    /// Runtimes published by older builds carry no pid and must stay usable.
+    #[test]
+    fn runtime_records_without_a_pid_still_deserialize() {
+        let runtime = parse(
+            r#"{"protocol":1,"version":"2.3.1","instance":"i","token":"t",
+                "port":50013,"mode":"shared"}"#,
+        );
+        assert_eq!(runtime.pid, None);
+    }
+
+    #[test]
+    fn a_pid_that_is_not_a_backend_is_not_signalled() {
+        // Guards the last-resort kill against a reused pid.
+        assert!(!super::is_backend_process(u32::MAX - 1));
+    }
+
+    /// The fake backend publishes itself, holds the lifetime lock, and either
+    /// exits on the shutdown request or waits for the supervisor's force-stop.
+    const FAKE_BACKEND: &str = r#"
+import fcntl, json, os, sys, threading, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+directory, mode = sys.argv[1], sys.argv[2]
+lock = open(os.path.join(directory, "runtime.lock"), "a+b")
+fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+        if mode == "exit":
+            threading.Timer(0.05, os._exit, (0,)).start()
+
+    def log_message(self, *args):
+        pass
+
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+with open(os.path.join(directory, "runtime.json"), "w") as stream:
+    json.dump(
+        {
+            "protocol": 1,
+            "version": "9.9.9",
+            "instance": "test-instance",
+            "token": "test-token",
+            "port": server.server_address[1],
+            "mode": "shared",
+            "pid": os.getpid(),
+        },
+        stream,
+    )
+print("ready", flush=True)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+while not os.path.exists(os.path.join(directory, "force-stop")):
+    time.sleep(0.02)
+os._exit(0)
+"#;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("qwenpaw-runtime-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn start_backend(directory: &Path, mode: &str) -> Option<Child> {
+        let script = directory.join("fake_backend.py");
+        std::fs::write(&script, FAKE_BACKEND).unwrap();
+        let child = Command::new("python3")
+            .arg(&script)
+            .arg(directory)
+            .arg(mode)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            if directory.join("runtime.json").exists() {
+                return Some(child);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        None
+    }
+
+    /// A backend that finishes its own teardown needs no escalation.
+    #[test]
+    fn quitting_stops_a_healthy_backend_without_killing_it() {
+        let directory = scratch("graceful");
+        let Some(mut child) = start_backend(&directory, "exit") else {
+            eprintln!("python3 unavailable; skipping");
+            return;
+        };
+        let runtime = Runtime::read(&directory).unwrap().expect("published");
+        let result = tauri::async_runtime::block_on(
+            runtime.stop_with_escalation(Duration::from_secs(5), Duration::from_secs(5)),
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(!directory.join("force-stop").exists());
+        assert!(child.wait().is_ok());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A backend that hangs after its shutdown request must still be stopped,
+    /// otherwise quitting leaves it running in the background.
+    #[test]
+    fn quitting_forces_a_hung_backend_to_stop() {
+        let directory = scratch("hung");
+        let Some(mut child) = start_backend(&directory, "hang") else {
+            eprintln!("python3 unavailable; skipping");
+            return;
+        };
+        let runtime = Runtime::read(&directory).unwrap().expect("published");
+        let started = Instant::now();
+        let result = tauri::async_runtime::block_on(
+            runtime.stop_with_escalation(Duration::from_millis(200), Duration::from_secs(5)),
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            directory.join("force-stop").exists(),
+            "the hung backend must be force-stopped"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(child.wait().is_ok());
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

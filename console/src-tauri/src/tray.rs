@@ -16,6 +16,12 @@ use serde::{Deserialize, Serialize};
 const SHOW_MENU_ID: &str = "show";
 const APPROVALS_MENU_ID: &str = "approvals";
 const QUIT_MENU_ID: &str = "quit";
+/// Menu id of the macOS application-menu Quit item, which owns `Cmd+Q`.
+const APP_QUIT_MENU_ID: &str = "app-quit";
+
+/// How long the exit hook may spend stopping the backend before the process
+/// exits anyway. It bounds an OS-initiated quit (`Cmd+Q`, Dock, AppleScript).
+const FINISH_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long Rust waits for the frontend to acknowledge a close request before
 /// falling back to minimize-to-tray. The frontend acks immediately (before it
@@ -128,6 +134,58 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
     }
 
     tray.build(app)?;
+    #[cfg(target_os = "macos")]
+    install_quit_menu_item(app)?;
+    // `Cmd+Q` is an explicit quit: stop the shared backend when this is the
+    // last client instead of leaving it running in the background.
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == APP_QUIT_MENU_ID {
+            exit_app(app, 0);
+        }
+    });
+    Ok(())
+}
+
+/// Replace the macOS application-menu Quit item.
+///
+/// Tauri's default menu installs the predefined Quit item, whose native
+/// `terminate:` action ends the process immediately. That path never reaches
+/// [`exit_app`], so the detached backend would keep running after `Cmd+Q`.
+/// Owning the item routes the shortcut through the normal shutdown instead.
+#[cfg(target_os = "macos")]
+fn install_quit_menu_item(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{MenuItem, MenuItemKind};
+
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    let Some(MenuItemKind::Submenu(application)) = menu.items()?.into_iter().next() else {
+        return Ok(());
+    };
+    let items = application.items()?;
+    // The application menu ends with the predefined Quit item; separators are
+    // predefined items too, so look for the trailing "Quit <app>" entry and
+    // fall back to the last predefined item when the label is unexpected.
+    let position = items
+        .iter()
+        .rposition(|item| match item {
+            MenuItemKind::Predefined(item) => item
+                .text()
+                .is_ok_and(|text| text.starts_with("Quit ") || text == "Quit"),
+            _ => false,
+        })
+        .or_else(|| {
+            matches!(items.last(), Some(MenuItemKind::Predefined(_))).then(|| items.len() - 1)
+        });
+    let Some(position) = position else {
+        log::warn!("[tray] macOS application menu has no Quit item to replace");
+        return Ok(());
+    };
+    application.remove_at(position)?;
+    let label = format!("Quit {}", app.package_info().name);
+    let quit = MenuItem::with_id(app, APP_QUIT_MENU_ID, label, true, Some("CmdOrCtrl+Q"))?;
+    application.insert(&quit, position)?;
+    log::info!("[tray] Cmd+Q now runs the desktop shutdown instead of AppKit terminate");
     Ok(())
 }
 
@@ -353,7 +411,8 @@ pub(crate) fn exit_app(app: &tauri::AppHandle, code: i32) {
     {
         return;
     }
-    // Destroy the document and release this client without stopping shared work.
+    // Close the window first so quitting feels immediate; the backend is
+    // stopped afterwards and only when this is the last client.
     if let Some(window) = app.get_webview_window("main") {
         if let Err(err) = window.destroy() {
             log::warn!("[desktop] failed to destroy window: {err}");
@@ -362,7 +421,19 @@ pub(crate) fn exit_app(app: &tauri::AppHandle, code: i32) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        backend::detach(&app);
+        // When this is the last client, stop the shared backend so no orphan
+        // process remains after the desktop exits. If other clients are still
+        // connected, only detach this client (the shared service keeps running).
+        match backend::stop_and_wait(&app).await {
+            Ok(()) => {}
+            Err(error) if error == backend::OTHER_CLIENTS_ERROR => {
+                backend::detach(&app);
+            }
+            Err(error) => {
+                log::warn!("[backend] graceful stop failed ({}); forcing exit", error);
+                backend::detach(&app);
+            }
+        }
         let handle = app.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
             if let Err(error) = crate::computer_use_runtime::stop(&handle) {
@@ -375,6 +446,41 @@ pub(crate) fn exit_app(app: &tauri::AppHandle, code: i32) {
             .store(true, Ordering::SeqCst);
         app.exit(code);
     });
+}
+
+/// Last-resort cleanup for exits that never went through [`exit_app`].
+///
+/// The Dock menu, `osascript ... quit` and — if the Quit menu item could not be
+/// replaced — `Cmd+Q` all reach AppKit's `terminate:`, which destroys the event
+/// loop directly. The process is already leaving, so blocking here only delays
+/// the exit; without it the detached backend would outlive the desktop.
+pub(crate) fn finish_exit(app: &tauri::AppHandle) {
+    if shutdown_complete(app) {
+        return;
+    }
+    app.state::<TrayState>()
+        .quitting
+        .store(true, Ordering::SeqCst);
+    let cleanup = async {
+        match tokio::time::timeout(FINISH_EXIT_TIMEOUT, backend::stop_and_wait(app)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) if error == backend::OTHER_CLIENTS_ERROR => {
+                backend::detach(app);
+            }
+            Ok(Err(error)) => log::warn!("[backend] exit cleanup failed: {error}"),
+            Err(_) => log::warn!(
+                "[backend] exit cleanup exceeded {}s",
+                FINISH_EXIT_TIMEOUT.as_secs()
+            ),
+        }
+    };
+    tauri::async_runtime::block_on(cleanup);
+    if let Err(error) = crate::computer_use_runtime::stop(app) {
+        log::warn!("[computer-use] failed to stop helper: {error}");
+    }
+    app.state::<TrayState>()
+        .shutdown_complete
+        .store(true, Ordering::SeqCst);
 }
 
 #[cfg(test)]

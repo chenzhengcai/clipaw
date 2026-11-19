@@ -22,10 +22,36 @@ export interface VoiceInputController {
   isActive: () => boolean;
 }
 
-/** Find the chat sender textarea (best-effort, host-version tolerant). */
+/**
+ * Find the chat sender textarea.
+ *
+ * The SDK marks its input with `data-sender-input="true"` (the Chat page's
+ * styles rely on it too), so prefer that.  The old `[class*="sender"]`
+ * lookup can match a wrapper *before* the real sender in document order
+ * (e.g. the plugin's own button carries `qwenpaw-sender-actions-btn`), which
+ * silently dropped every transcription.  Only visible textareas qualify.
+ */
 function findSenderTextarea(): HTMLTextAreaElement | null {
-  const sender = document.querySelector('[class*="sender"]');
-  return (sender?.querySelector("textarea") as HTMLTextAreaElement) ?? null;
+  const isVisible = (el: HTMLElement) => el.offsetParent !== null;
+
+  const marked = Array.from(
+    document.querySelectorAll<HTMLTextAreaElement>(
+      'textarea[data-sender-input="true"]',
+    ),
+  );
+  const visibleMarked = marked.find(isVisible) ?? marked[0];
+  if (visibleMarked) return visibleMarked;
+
+  for (const sender of Array.from(
+    document.querySelectorAll<HTMLElement>('[class*="sender"]'),
+  )) {
+    const textarea = sender.querySelector("textarea");
+    if (textarea && isVisible(textarea)) return textarea;
+  }
+
+  const focused = document.activeElement;
+  if (focused instanceof HTMLTextAreaElement) return focused;
+  return null;
 }
 
 /**
@@ -50,33 +76,30 @@ export function useVoiceInput(): VoiceInputController {
   // that arrive after sending are ignored so the cleared input stays clean.
   const voiceSessionActiveRef = useRef(false);
 
-  const handleTranscription = useCallback(
-    (text: string, isPartial = false) => {
-      if (!voiceSessionActiveRef.current) return;
-      const textarea = findSenderTextarea();
-      if (!textarea) return;
+  const handleTranscription = useCallback((text: string, isPartial = false) => {
+    if (!voiceSessionActiveRef.current) return;
+    const textarea = findSenderTextarea();
+    if (!textarea) return;
 
-      const current = textarea.value || "";
+    const current = textarea.value || "";
 
-      if (isPartial) {
-        // Replace the voice portion: keep prefix, append new voice text
-        const prefixLen = current.length - voiceLenRef.current;
-        const prefix = prefixLen > 0 ? current.slice(0, prefixLen) : "";
-        voiceLenRef.current = text.length;
-        const newValue = prefix ? `${prefix}${text}` : text;
-        setTextareaValue(textarea, newValue);
-      } else {
-        // Final: keep what was there before voice started, append final text
-        voiceLenRef.current = 0;
-        const newValue = voiceBaseRef.current
-          ? `${voiceBaseRef.current}${text}`
-          : text;
-        setTextareaValue(textarea, newValue);
-      }
-      textarea.focus();
-    },
-    [],
-  );
+    if (isPartial) {
+      // Replace the voice portion: keep prefix, append new voice text
+      const prefixLen = current.length - voiceLenRef.current;
+      const prefix = prefixLen > 0 ? current.slice(0, prefixLen) : "";
+      voiceLenRef.current = text.length;
+      const newValue = prefix ? `${prefix}${text}` : text;
+      setTextareaValue(textarea, newValue);
+    } else {
+      // Final: keep what was there before voice started, append final text
+      voiceLenRef.current = 0;
+      const newValue = voiceBaseRef.current
+        ? `${voiceBaseRef.current}${text}`
+        : text;
+      setTextareaValue(textarea, newValue);
+    }
+    textarea.focus();
+  }, []);
 
   // Capture the pre-voice textarea content as the replace base.
   const onStart = useCallback(() => {

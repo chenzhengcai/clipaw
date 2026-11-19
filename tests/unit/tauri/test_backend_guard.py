@@ -60,6 +60,8 @@ def test_runtime_lock_rejects_a_second_owner(
         assert record["version"] == expected
         assert record["version"] == manifest_to_semver(version)
         assert record["token"] == first.token
+        # The desktop needs the pid to stop a backend whose supervisor died.
+        assert record["pid"] == os.getpid()
     assert not (first.directory / "runtime.json").exists()
     with BackendInstance(tmp_path, "shared") as replacement:
         assert replacement.instance != first.instance

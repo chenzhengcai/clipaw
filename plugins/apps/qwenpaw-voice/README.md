@@ -18,8 +18,15 @@
 
 | 状态 | 行为 |
 |------|------|
-| **开启**（默认） | 插件麦克风经 `senderPrefix` 槽挂载，使用火山流式 ASR；Chat 页内置 Whisper 按钮与 SDK `allowSpeech` 均让位，避免双麦克风 |
+| **开启**（默认） | 麦克风由本插件接管：优先**劫持宿主已有的麦克风按钮**（SDK `allowSpeech` 麦克风或官方 `WhisperSpeechButton`），点击走火山流式 ASR；宿主没有任何麦克风时，插件在 `senderPrefix` 槽渲染自己的按钮。宿主内置按钮不会被触发，因此不会出现「双麦克风」或「点到内置一次性转写」 |
 | **关闭** | 插件麦克风与快捷键全部下线；Chat 页回退官方内置语音（`WhisperSpeechButton` + `allowSpeech`） |
+
+> **v1.5.3 修复**：此前插件只劫持 SDK 的 `.spark-icon-spark-mic-line` 按钮。
+> 一旦宿主没有渲染该按钮（`allowSpeech=false`，例如已配置 Whisper 转写
+> provider），点击麦克风会走宿主自己的转写接口而不是插件，表现为
+> **「点击麦克风没有输入语音」**。现在插件按 DOM 发现任意宿主麦克风
+> （SDK 麦克风 / 官方 Whisper 按钮的 lucide `mic` 图标），都劫持到流式识别；
+> 一个都没有时才渲染自己的按钮（`data-qwenpaw-voice-mic` 标记，避免自劫持）。
 
 切换即时生效：插件在 `localStorage` 写键后派发 `qwenpaw-voice-change`
 自定义事件（同 tab），storage 事件（跨 tab）负责其余标签页同步。开关值持久化
@@ -29,9 +36,8 @@
 
 **按钮位置与图标（开/关对输入框无感知）**：
 
-- **位置**：插件麦克风固定渲染在 sender prefix 行**第一项**，与官方
-  `WhisperSpeechButton` 同一位置（`Chat/index.tsx` 的 `{pluginSenderPrefix}`
-  排在 `prefix` 块最前）。
+- **位置**：优先复用宿主自己的麦克风按钮，因此位置/外观与官方完全一致；
+  仅当宿主没有麦克风按钮时，才在 sender prefix 槽渲染插件自己的按钮。
 - **图标**：直接复用官方类名 `spark-icon spark-icon-spark-mic-line` +
   `data-spark-icon="true"`，svg 用官方同款属性（含 `overflow="hidden"`）与
   3 条逐字复刻的 path。console 已全局加载 `.spark-icon` CSS，无需自注入。

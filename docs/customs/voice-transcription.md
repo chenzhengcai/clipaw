@@ -124,13 +124,44 @@ ns.chat.sender.addPrefix(PLUGIN_ID, <VoiceSenderPrefix />, { order: 0 });
 allowSpeech: !pluginVoiceOn && whisperChecked && !whisperEnabled,
 ```
 
+### 2b. 宿主麦克风发现与兜底（v1.5.3）
+
+上述门控属于 fork 对上游的**增量改动**。一旦上游同步把它丢掉（或宿主的
+`allowSpeech` 因为已配置 Whisper provider 而为 `false`），SDK 麦克风就不再
+渲染，插件只劫持 `.spark-icon-spark-mic-line` 的做法会**彻底失效**：点击麦克风
+走的是宿主自己的转写接口（本地 whisper 未安装时直接 500），用户看到的现象是
+**「点击语音输入按钮没有正常输入语音」**。
+
+因此插件不再依赖宿主的门控，改为 **DOM 发现 + 兜底**：
+
+| 宿主渲染的麦克风 | 插件行为 |
+|-----------------|---------|
+| SDK `allowSpeech` 麦克风（`span.spark-icon-spark-mic-line`） | 捕获阶段劫持点击 → 流式录音；按钮本体即 UI（位置/外观不变） |
+| 官方 `WhisperSpeechButton`（lucide `mic` 图标 / `Speech Recording` 图标） | 同上（宿主的一次性转写不会被触发） |
+| 一个都没有 | 在 `senderPrefix` 槽渲染插件自己的按钮（外观与官方一致） |
+
+实现要点（`frontend/src/index.tsx`）：
+
+- 宿主麦克风按钮通过 `senderMicScope()`（`[class$="-sender-prefix"]`）限定在
+  输入栏前缀行内查找，避免误伤页面其他按钮；
+- 插件自己的 DOM 带 `data-qwenpaw-voice-mic` 标记，劫持与样式反馈都会跳过它；
+- `lucide-loader-circle`（通用 spinner）**不**作为麦克风特征，防止把加载中的
+  模型选择器误判成麦克风；
+- 200 ms 的 tick 同时负责：刷新「宿主是否有麦克风」（决定是否显示插件按钮）
+  以及录音/转录中的按钮变色；
+- 内置快捷键 `Ctrl/Cmd+Shift+M` 在捕获阶段被插件接管（`stopPropagation`），
+  避免触发宿主的官方一次性转写。
+
+> 宿主若恢复 `pluginVoiceOn` 门控（`allowSpeech` 恒为真、内置按钮让位），
+> 插件自动走「劫持 SDK 麦克风」这条路径，行为与旧版一致；两种宿主都能工作。
+
 ### 3. 总开关：实时语音 ⇄ 官方内置语音
 
 设置页第一张卡片控制 `qwenpaw_voice_enabled`（默认开启）：
 
 | 状态 | 麦克风 | 快捷键 | SDK `allowSpeech` |
 |------|--------|--------|-------------------|
-| 开启（默认） | 插件流式麦克风（senderPrefix 槽） | 插件可配置快捷键（toggle/hold） | 禁用（防双麦克风） |
+| 开启（默认） | 劫持宿主已有麦克风（SDK 麦克风或官方 Whisper 按钮）；宿主没有时用插件自己的按钮（senderPrefix 槽） | 插件可配置快捷键（toggle/hold）+ 接管内置 Ctrl/Cmd+Shift+M | 建议禁用（防双麦克风，见 2b 兜底） |
 | 关闭（`"0"`） | 官方 `WhisperSpeechButton`（whisper provider 已配置时） | 内置 Ctrl/Cmd+Shift+M | 恢复官方公式 |
 
 同步机制（`config.ts saveVoiceEnabled`）：

@@ -324,17 +324,13 @@ async def upload_library_file(file: UploadFile = File(...)) -> Dict[str, Any]:
             "(jpg/png/gif/webp/avif) or a video (mp4/webm/mov).",
         )
 
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            413, f"File too large (limit {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)"
-        )
-    if not data:
-        raise HTTPException(400, "Empty file")
+    suffix = Path(name).suffix.lower()
+    if _kind_for_suffix(suffix) is None:
+        suffix = mimetypes.guess_extension(ctype) or ""
+        if _kind_for_suffix(suffix) is None:
+            # Do not relabel SVG or another unsupported payload as PNG/MP4.
+            raise HTTPException(400, "Unsupported media format")
 
-    suffix = Path(name).suffix.lower() or (
-        mimetypes.guess_extension(ctype) or (".png" if kind == "image" else ".mp4")
-    )
     stored_name = f"{uuid.uuid4().hex[:8]}_{_safe_filename(name)}"
     if _kind_for_suffix(Path(stored_name).suffix) is None:
         stored_name = f"{stored_name}{suffix}"
@@ -344,15 +340,36 @@ async def upload_library_file(file: UploadFile = File(...)) -> Dict[str, Any]:
     resolved = target.resolve()
     if not resolved.is_relative_to(_LIBRARY_DIR.resolve()):
         raise HTTPException(403, "Access denied")
-    resolved.write_bytes(data)
+
+    # Stream to a sibling temporary file with a hard byte limit. This avoids a
+    # 200 MB-per-upload memory spike and never leaves a partial library item.
+    fd, temporary = tempfile.mkstemp(
+        dir=str(_LIBRARY_DIR), prefix=".upload-", suffix=".tmp"
+    )
+    size = 0
+    try:
+        with open(fd, "wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        413,
+                        f"File too large (limit {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+                    )
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "Empty file")
+        Path(temporary).replace(resolved)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
     logger.info(
-        "[background-theme] stored %s (%s, %d bytes)", stored_name, kind, len(data)
+        "[background-theme] stored %s (%s, %d bytes)", stored_name, kind, size
     )
     return {
         "name": stored_name,
         "kind": kind,
-        "size": len(data),
+        "size": size,
         "addedAt": int(time.time() * 1000),
         "url": _media_url(stored_name),
     }
@@ -401,6 +418,7 @@ def _migrate_legacy_data() -> None:
     if not _LEGACY_DATA_DIR.exists():
         return
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
     legacy_lib = _LEGACY_DATA_DIR / "library"
     if legacy_lib.exists():

@@ -15,6 +15,7 @@
 | [voice-streaming-replace-regression.md](./voice-streaming-replace-regression.md) | 语音流式重复+快捷键失效回归修复 — clipaw2.x 丢失老分支定制的移植记录 | 2026-09-10 | 2026-09-10 |
 | [clipaw2x-migration-audit.md](./clipaw2x-migration-audit.md) | clipaw2.x 迁移全面对账 — 10 项定制核对 + 2 项回归修复（曲线圆滑/loadClientConfig） | 2026-09-10 | 2026-09-10 |
 | [merge-qwenmain-into-clipaw2.x-conflict-resolution.md](./merge-qwenmain-into-clipaw2.x-conflict-resolution.md) | **合并 qwenmain → clipaw2.x 冲突解决记录** — 12 个冲突逐项根因、criss-cross 虚拟基线导致的 3 处静默回退、20 个重叠文件审计、下次同步检查清单 | 2026-11-18 | 2026-11-18 |
+| [macos-cmd-q-full-quit.md](./macos-cmd-q-full-quit.md) | **macOS Cmd+Q 未完全退出** — AppKit `terminate:` 绕过 `exit_app`、后端卡死收尾、supervisor 无限 `child.wait()`；修复=自建 Quit 菜单项 + `RunEvent::Exit` 兜底 + `force-stop` 升级 + 进程组终止 | 2026-11-19 | 2026-11-19 |
 
 ## 快速检索指南（给 LLM）
 
@@ -28,6 +29,7 @@
 | `语音重复`, `逐字重复`, `流式重复`, `快捷键失效`, `voiceBaseRef`, `voiceLenRef`, `voiceSessionActiveRef`, `matchShortcut`, `qwenpaw_voice_shortcut`, `发送不停止录音`, `handleWhisperTranscription`, `resetSession` | [voice-streaming-replace-regression.md](./voice-streaming-replace-regression.md) |
 | `迁移对账`, `审计`, `clipaw2.x`, `d6797401`, `loadClientConfig`, `lineChartChrome`, `曲线圆滑丢失`, `Tauri 重启丢配置`, `端口变化`, `定制完整性` | [clipaw2x-migration-audit.md](./clipaw2x-migration-audit.md) |
 | `合并 qwenmain`, `merge`, `冲突`, `criss-cross`, `merge-base`, `虚拟基线`, `静默丢失`, `silent revert`, `_sync_bundled_plugins`, `CliPaw`, `clipaw.desktop`, `TranscriptionModelCard`, `ShortcutSettings`, `Cargo.lock`, `desktop-release.yml`, `build_common.py`, `qwenpaw.spec`, `codex`, `qoder`, `full extra` | [merge-qwenmain-into-clipaw2.x-conflict-resolution.md](./merge-qwenmain-into-clipaw2.x-conflict-resolution.md) |
+| `Cmd+Q`, `Command+Q`, `完全退出`, `进程残留`, `孤儿进程`, `terminate:`, `AppKit`, `RunEvent::Exit`, `RunEvent::ExitRequested`, `predefined quit`, `app-quit`, `force-stop`, `stop-request`, `daemon.lock`, `runtime.lock`, `runtime.json`, `pid`, `supervisor`, `agent-host`, `qwenpaw-backend`, `child.wait()`, `process_group` | [macos-cmd-q-full-quit.md](./macos-cmd-q-full-quit.md) |
 
 ## 维护原则
 

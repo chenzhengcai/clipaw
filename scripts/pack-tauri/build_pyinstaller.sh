@@ -175,6 +175,11 @@ if ! "$PYTHON_BIN" -c "from acp import Agent" 2> /dev/null; then
 fi
 echo ""
 
+echo "== Building manifest-opted desktop app plugins =="
+"$PYTHON_BIN" "${REPO_ROOT}/scripts/pack-tauri/app_plugins.py" \
+    --repo-root "${REPO_ROOT}" --build
+echo ""
+
 # Run PyInstaller
 echo "== Running PyInstaller =="
 echo "Building onedir backend bundle..."

@@ -22,6 +22,9 @@ use status::{Phase, Snapshot, Status};
 pub(crate) const OTHER_CLIENTS_ERROR: &str =
     "Other clients are still using QwenPaw. Close them before stopping the service.";
 
+/// How long a quit waits for a backend that is still starting before giving up.
+const RUNTIME_START_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Default)]
 pub(crate) struct BackendState {
     connection: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -124,18 +127,35 @@ pub(crate) async fn other_clients(app: &tauri::AppHandle) -> Result<usize, Strin
 pub(crate) async fn stop_and_wait(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<BackendState>();
     let _operation = state.lifecycle.lock().await;
-    let runtime = state
+    let connected = state
         .runtime
         .lock()
         .expect("backend runtime poisoned")
         .clone();
-    let runtime = runtime.ok_or("No connected runtime to stop")?;
+    // A desktop can quit before it connected, or while the supervisor is still
+    // starting a backend. Stop that runtime too instead of orphaning it.
+    let directory = runtime::directory()?;
+    let runtime = match connected {
+        Some(runtime) => Some(runtime),
+        None => match runtime::Runtime::read(&directory) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                // A supervisor holds the lifetime lock but has not published a
+                // runtime yet; wait for it so it can be stopped properly.
+                log::info!("[backend] waiting for the starting runtime: {error}");
+                runtime::wait_for_runtime(&directory, RUNTIME_START_TIMEOUT).await
+            }
+        },
+    };
+    let Some(runtime) = runtime else {
+        return Ok(());
+    };
     state.stopping.store(true, Ordering::SeqCst);
     let generation = state.generation.load(Ordering::SeqCst);
     state
         .status
         .publish(app, generation, Phase::Stopping, Some(runtime.port), None);
-    let result = runtime.stop().await.map(|_| ());
+    let result = runtime.stop_for_exit().await;
     state.stopping.store(false, Ordering::SeqCst);
     match &result {
         Ok(()) => detach(app),

@@ -24,6 +24,7 @@ if _plugin_dir not in sys.path:
 from qwenpaw.plugins.api import PluginApi  # noqa: E402
 
 from backend.router import build_router  # noqa: E402
+from backend.sessions import close_all  # noqa: E402
 
 logger = logging.getLogger("qwenpaw.voice")
 
@@ -39,6 +40,8 @@ class QwenpawVoicePlugin:
             prefix="/qwenpaw-voice",
             tags=["qwenpaw-voice"],
         )
+        # The host awaits this teardown on disable, reload and app shutdown.
+        api.effect("voice-sessions", setup=None, teardown=close_all)
         logger.info("QwenPaw Voice plugin registered")
 
 

@@ -1,3 +1,7 @@
+> **现状（2026-11-19）**：上游 `#8373` 已把桌面端改成"共享 daemon + 多客户端"架构，本文件描述的 `shutdown.rs` 方案已不存在于当前分支。
+> macOS `Cmd+Q` 残留、后端卡死收尾、supervisor 无限 `child.wait()` 等问题的最新根因与修复见
+> [macos-cmd-q-full-quit.md](./macos-cmd-q-full-quit.md)。本文件仅作为历史排查记录保留。
+
 # 修复窗口退出卡死与 macOS 后端进程残留
 
 ## 2026 上游复查（main 77744172）

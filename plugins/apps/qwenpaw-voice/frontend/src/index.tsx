@@ -37,11 +37,71 @@ const { useEffect, useRef, useState } = React;
 
 // Mic glyph for the sidebar menu entry. antd's AudioOutlined is the mic icon;
 // fall back to an emoji when the host does not expose antd icons.
-const MicMenuIcon = antdIcons?.AudioOutlined ? (
-  React.createElement(antdIcons.AudioOutlined)
-) : (
-  "🎤"
-);
+const MicMenuIcon = antdIcons?.AudioOutlined
+  ? React.createElement(antdIcons.AudioOutlined)
+  : "🎤";
+
+// ── Host microphone discovery (DOM-driven) ──────────────────────────────
+//
+// The visible microphone belongs to the host, and *which* button it is
+// depends on the host build:
+//
+//   * SDK `allowSpeech` mic   → `span.spark-icon-spark-mic-line`
+//   * official Whisper button → lucide `mic` (idle) / `loader-circle` (busy)
+//                               / `<title>Speech Recording</title>`
+//
+// The fork's Chat page used to force the SDK mic on while this plugin was
+// enabled, so hijacking that single button was enough.  When that host-side
+// gate is missing (upstream sync, or `allowSpeech` off because a Whisper
+// provider is configured) the SDK mic is not rendered at all: only the
+// official Whisper button is left, the hijack finds nothing, and the click
+// runs the host's own (often unconfigured) transcription instead — the
+// "clicking the mic inputs nothing" regression.
+//
+// So the plugin now hijacks *any* host mic it can find, and only when the
+// host renders none at all does it fall back to its own button in the sender
+// prefix slot.
+const PLUGIN_MIC_ATTR = "data-qwenpaw-voice-mic";
+
+/** True for DOM owned by this plugin (never hijacked). */
+function isPluginMic(node: Element | null): boolean {
+  return Boolean(node?.closest(`[${PLUGIN_MIC_ATTR}]`));
+}
+
+/** True when `btn` is one of the host's microphone buttons. */
+function isHostMicButton(btn: Element | null): boolean {
+  if (!btn || isPluginMic(btn)) return false;
+  // SDK `allowSpeech` mic.
+  if (btn.querySelector(".spark-icon-spark-mic-line")) return true;
+  // Official Whisper button: lucide `mic` while idle.  Its busy state uses a
+  // generic spinner, which is deliberately NOT matched — other prefix buttons
+  // (model selectors etc.) show the same spinner while loading.
+  if (btn.querySelector("svg.lucide-mic")) return true;
+  // Official Whisper button while it is recording.
+  for (const title of Array.from(btn.querySelectorAll("svg > title"))) {
+    if ((title.textContent || "").trim() === "Speech Recording") return true;
+  }
+  return false;
+}
+
+/** Scope that holds the sender microphones (prefix row of the SDK sender). */
+function senderMicScope(): Element | null {
+  return (
+    document.querySelector('[class$="-sender-prefix"]') ||
+    document.querySelector('[class*="sender"]')
+  );
+}
+
+/** All host microphone buttons currently rendered in the sender. */
+function hostMicButtons(): HTMLButtonElement[] {
+  const scope = senderMicScope();
+  if (!scope) return [];
+  const found: HTMLButtonElement[] = [];
+  for (const btn of Array.from(scope.querySelectorAll("button"))) {
+    if (isHostMicButton(btn)) found.push(btn as HTMLButtonElement);
+  }
+  return found;
+}
 
 // ── Sender prefix: mic button (only while the master switch is on) ──────
 
@@ -49,6 +109,9 @@ function VoiceSenderPrefix() {
   const speechRef = useRef<SpeechButtonRef>(null);
   const voice = useVoiceInput();
   const [voiceEnabled, setVoiceEnabled] = useState(loadVoiceEnabled);
+  // False while a host mic button exists (it is hijacked and serves as the
+  // UI); true when the host renders none, so we show our own button.
+  const [ownMicVisible, setOwnMicVisible] = useState(false);
 
   // Master-switch sync: custom event for same-tab toggles (the settings page
   // is in the same SPA), storage event for cross-tab changes.
@@ -137,11 +200,9 @@ function VoiceSenderPrefix() {
     };
     window.addEventListener("storage", onStorage);
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!isChatScope()) return;
-      if (!isVoiceConnected()) return;
-      if (!matchShortcut(e, shortcut)) return;
-      e.preventDefault();
+    // Shared press/release semantics so both the plugin's own shortcut and the
+    // intercepted built-in one behave the same in "toggle" and "hold" modes.
+    const press = () => {
       if (mode === "hold") {
         if (speechRef.current && !speechRef.current.isRecording()) {
           speechRef.current.toggleRecording();
@@ -152,41 +213,78 @@ function VoiceSenderPrefix() {
       }
     };
 
-    const onKeyUp = (e: KeyboardEvent) => {
+    const release = () => {
       if (mode !== "hold" || !holdActive) return;
-      if (!matchShortcut(e, shortcut)) return;
-      e.preventDefault();
       if (speechRef.current?.isRecording()) {
         speechRef.current.toggleRecording();
       }
       holdActive = false;
     };
 
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isChatScope()) return;
+      if (!isVoiceConnected()) return;
+      if (!matchShortcut(e, shortcut)) return;
+      e.preventDefault();
+      press();
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!matchShortcut(e, shortcut)) return;
+      e.preventDefault();
+      release();
+    };
+
+    // The host's built-in Ctrl/Cmd+Shift+M stays active whenever a Whisper
+    // provider is configured, and it runs the host's own one-shot
+    // transcription (unavailable unless that provider is set up).  While this
+    // plugin is on, that shortcut belongs to the plugin: intercept it in the
+    // capture phase so the host handler never fires.
+    const isBuiltinShortcut = (e: KeyboardEvent) =>
+      (e.ctrlKey || e.metaKey) &&
+      e.shiftKey &&
+      !e.altKey &&
+      e.key.toLowerCase() === "m";
+
+    const onBuiltinKeyDown = (e: KeyboardEvent) => {
+      if (!isBuiltinShortcut(e)) return;
+      if (!isChatScope() || !isVoiceConnected()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      press();
+    };
+
+    const onBuiltinKeyUp = (e: KeyboardEvent) => {
+      if (!isBuiltinShortcut(e)) return;
+      if (!holdActive) return;
+      e.stopPropagation();
+      release();
+    };
+
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("keydown", onBuiltinKeyDown, true);
+    document.addEventListener("keyup", onBuiltinKeyUp, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("keydown", onBuiltinKeyDown, true);
+      document.removeEventListener("keyup", onBuiltinKeyUp, true);
       window.removeEventListener("storage", onStorage);
     };
   }, [voiceEnabled]);
 
-  // Plugin ON: hijack the SDK speech button's click (capture phase) to
-  // trigger the plugin's streaming recording instead of the SDK's built-in
-  // speech recognition.  The SDK button stays in its original position
-  // (before the attachment button) with its native look — open/close is
-  // completely transparent to the input bar.
+  // Plugin ON: hijack the host microphone's click (capture phase) so it runs
+  // this plugin's streaming recording instead of the host's own handler.
+  // Works for both host variants: the SDK `allowSpeech` mic and the official
+  // Whisper button.  The button keeps its native look and position.
   useEffect(() => {
     if (!voiceEnabled) return;
     const onMicClick = (e: MouseEvent) => {
-      const icon = (e.target as HTMLElement | null)?.closest(
-        ".spark-icon-spark-mic-line",
-      );
-      if (!icon) return;
-      const btn = icon.closest("button");
-      if (!btn) return;
-      // Our hidden SpeechButton wrapper has pointerEvents:none, so this
-      // click is from the visible SDK speech button.
+      const target = e.target as Element | null;
+      if (!target || isPluginMic(target)) return;
+      const btn = target.closest("button");
+      if (!isHostMicButton(btn)) return;
       e.stopPropagation();
       e.preventDefault();
       speechRef.current?.toggleRecording();
@@ -195,23 +293,35 @@ function VoiceSenderPrefix() {
     return () => document.removeEventListener("click", onMicClick, true);
   }, [voiceEnabled]);
 
-  // Recording state feedback: style the SDK speech button (color) so the
-  // user sees when the plugin is recording / transcribing.
+  // Host mic presence + recording state feedback.
+  //
+  //  - A host mic exists  → keep our own button hidden and hijacked (the host
+  //    button is the UI, as before).
+  //  - No host mic at all → render our own button in the sender prefix slot,
+  //    so voice input never silently disappears.
+  //
+  // The 200 ms tick also recolours the active host mic while recording or
+  // transcribing, because the host button never enters that state itself.
   useEffect(() => {
     if (!voiceEnabled) return;
-    const tick = () => {
-      const rec = speechRef.current?.isRecording();
+
+    const sync = () => {
+      const hostMics = hostMicButtons();
+      const ownMicNeeded = hostMics.length === 0;
+      setOwnMicVisible((prev) => (prev === ownMicNeeded ? prev : ownMicNeeded));
+
+      const recording = speechRef.current?.isRecording();
       const loading = speechRef.current?.isLoading();
-      const icons = document.querySelectorAll(".spark-icon-spark-mic-line");
-      for (const icon of Array.from(icons)) {
-        const btn = icon.closest("button") as HTMLButtonElement | null;
-        if (btn && btn.offsetParent !== null) {
-          btn.style.color = rec || loading ? "#1890ff" : "";
+      for (const btn of hostMics) {
+        if (btn.offsetParent !== null) {
+          btn.style.color = recording || loading ? "#1890ff" : "";
           break;
         }
       }
     };
-    const id = setInterval(tick, 200);
+
+    sync();
+    const id = setInterval(sync, 200);
     return () => clearInterval(id);
   }, [voiceEnabled]);
 
@@ -219,28 +329,36 @@ function VoiceSenderPrefix() {
   // built-in official voice input.
   if (!voiceEnabled) return null;
 
-  // Render a visually-hidden SpeechButton that provides the actual
-  // recording logic (WebSocket, PCM, transcription callbacks).  It is
-  // never seen or clicked directly — the visible SDK speech button serves
-  // as the UI, and its clicks are hijacked above to drive this instance.
-  return (
-    <div
-      style={{
+  // The SpeechButton provides the recording logic (WebSocket, PCM,
+  // transcription callbacks).
+  //
+  //  - ownMicVisible = false → visually hidden: the hijacked host mic button
+  //    is the UI (identical look and position, no duplicate mic).
+  //  - ownMicVisible = true  → rendered inline in the sender prefix row, so
+  //    the plugin still works when the host renders no mic at all.
+  const wrapperStyle: React.CSSProperties = ownMicVisible
+    ? { display: "inline-flex", alignItems: "center" }
+    : {
         position: "absolute",
         width: 0,
         height: 0,
         overflow: "hidden",
         opacity: 0,
         pointerEvents: "none",
-      }}
-      aria-hidden="true"
+      };
+
+  return (
+    <span
+      {...{ [PLUGIN_MIC_ATTR]: "1" }}
+      style={wrapperStyle}
+      aria-hidden={ownMicVisible ? undefined : true}
     >
       <SpeechButton
         ref={speechRef}
         onTranscription={voice.handleTranscription}
         onStart={voice.onStart}
       />
-    </div>
+    </span>
   );
 }
 

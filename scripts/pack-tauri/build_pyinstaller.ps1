@@ -207,6 +207,12 @@ if (-not (Test-PythonImport "from acp import Agent")) {
     Write-Host "agent-client-protocol installed" -ForegroundColor Green
 }
 
+Write-Host "== Building manifest-opted desktop app plugins ==" -ForegroundColor Yellow
+& $PYTHON_BIN (Join-Path $REPO_ROOT "scripts\pack-tauri\app_plugins.py") `
+    --repo-root $REPO_ROOT --build
+Assert-LastExit "Desktop app plugin frontend build failed"
+Write-Host ""
+
 # Run PyInstaller
 Write-Host "== Running PyInstaller ==" -ForegroundColor Yellow
 Write-Host "Building onedir backend bundle..."
