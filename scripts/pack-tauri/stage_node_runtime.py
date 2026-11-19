@@ -4,16 +4,26 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import os
 import platform
 import shutil
 import tarfile
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
 
 NODE_DIST_URL = "https://nodejs.org/dist"
+# Official releases are the primary source. The npmmirror copy of the same
+# nodejs.org artifacts is used only when the official host is unreachable or
+# keeps dropping the connection (common behind restrictive networks); set
+# QWENPAW_NODE_DIST_URL to force a single source instead.
+NODE_DIST_FALLBACKS = ("https://cdn.npmmirror.com/binaries/node",)
+NODE_DIST_ENV = "QWENPAW_NODE_DIST_URL"
+HTTP_ATTEMPTS = 4
+HTTP_TIMEOUT_SECONDS = 120
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NODE_VERSION_FILE = REPO_ROOT / f".nvmrc"
 
@@ -62,10 +72,57 @@ def _npx_exe(dest: Path) -> Path:
 
 
 def _http_get(url: str) -> bytes:
-    request = urllib.request.Request(url)
-    request.add_header("User-Agent", "qwenpaw-build")
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return response.read()
+    """Fetch a URL, retrying transient transport failures.
+
+    Slow links routinely drop mid-body (``IncompleteRead``) or reset the
+    connection; those are ``http.client.HTTPException`` instances, not
+    ``OSError``, so they need to be retried explicitly instead of aborting the
+    whole desktop build on the first hiccup.
+    """
+    last: Exception | None = None
+    for attempt in range(1, HTTP_ATTEMPTS + 1):
+        request = urllib.request.Request(url)
+        request.add_header("User-Agent", "qwenpaw-build")
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=HTTP_TIMEOUT_SECONDS,
+            ) as response:
+                return response.read()
+        except (OSError, http.client.HTTPException) as exc:
+            last = exc
+            if attempt == HTTP_ATTEMPTS:
+                break
+            wait = 2 ** (attempt - 1)
+            print(
+                f"  {type(exc).__name__} fetching {url}; "
+                f"retrying in {wait}s ({attempt}/{HTTP_ATTEMPTS})",
+            )
+            time.sleep(wait)
+    assert last is not None
+    raise last
+
+
+def _dist_bases() -> tuple[str, ...]:
+    override = os.environ.get(NODE_DIST_ENV, "").strip()
+    if override:
+        return (override.rstrip("/"),)
+    return (NODE_DIST_URL, *NODE_DIST_FALLBACKS)
+
+
+def _download_archive(version: str, archive_name: str) -> bytes:
+    failures: list[str] = []
+    for base in _dist_bases():
+        url = f"{base}/{version}/{archive_name}"
+        print(f"Downloading {url}")
+        try:
+            return _http_get(url)
+        except Exception as exc:  # noqa: BLE001 - try the next mirror
+            failures.append(f"{url}: {type(exc).__name__}: {exc}")
+            print(f"  source failed: {type(exc).__name__}: {exc}")
+    raise SystemExit(
+        "could not download the Node.js runtime:\n  " + "\n  ".join(failures),
+    )
 
 
 def _extract(archive: Path, suffix: str, workdir: Path) -> Path:
@@ -134,14 +191,12 @@ def main() -> None:
         return
 
     archive_name = f"node-{version}-{target}.{suffix}"
-    url = f"{NODE_DIST_URL}/{version}/{archive_name}"
     print(f"Staging Node.js {version} for {target}...")
-    print(f"Downloading {url}")
 
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
         archive = tmpdir / archive_name
-        archive.write_bytes(_http_get(url))
+        archive.write_bytes(_download_archive(version, archive_name))
         extracted = _extract(archive, suffix, tmpdir)
 
         if dest.exists():

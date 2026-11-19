@@ -33,14 +33,42 @@ echo ""
 # Check prerequisites
 echo "== Checking prerequisites =="
 
-if command -v python3 >/dev/null 2>&1; then
-    BOOTSTRAP_PYTHON=$(command -v python3)
-elif command -v python >/dev/null 2>&1; then
-    BOOTSTRAP_PYTHON=$(command -v python)
+# Pick a bootstrap interpreter that python-build-standalone still publishes and
+# that qwenpaw supports (>=3.11,<3.14). A bare `python3` on macOS is usually the
+# system 3.9 build, which no longer ships install_only assets -- staging would
+# then fail with a confusing "no asset for Python 3.9" message. Scan versioned
+# names first, and let QWENPAW_BUILD_PYTHON pin an exact interpreter.
+BOOTSTRAP_PYTHON=""
+if [ -n "${QWENPAW_BUILD_PYTHON:-}" ]; then
+    if command -v "${QWENPAW_BUILD_PYTHON}" >/dev/null 2>&1; then
+        BOOTSTRAP_PYTHON=$(command -v "${QWENPAW_BUILD_PYTHON}")
+    else
+        echo "ERROR: QWENPAW_BUILD_PYTHON=${QWENPAW_BUILD_PYTHON} is not an executable on PATH"
+        exit 1
+    fi
 else
-    echo "ERROR: Python not found on PATH; it is required to stage the bundled runtime"
+    for candidate in python3.13 python3.12 python3.11 python3 python; do
+        command -v "$candidate" >/dev/null 2>&1 || continue
+        resolved=$(command -v "$candidate")
+        version=$("$resolved" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)
+        case "$version" in
+            3.11|3.12|3.13)
+                BOOTSTRAP_PYTHON="$resolved"
+                break
+                ;;
+        esac
+    done
+fi
+
+if [ -z "${BOOTSTRAP_PYTHON}" ]; then
+    echo "ERROR: no supported Python (3.11-3.13) found on PATH."
+    echo "       'python3' resolves to: $(command -v python3 2>/dev/null || echo 'nothing') ($(python3 --version 2>&1 || true))"
+    echo "       qwenpaw requires >=3.11,<3.14; its bundled runtime is staged from this"
+    echo "       interpreter. Install one (e.g. 'brew install python@3.13') or set"
+    echo "       QWENPAW_BUILD_PYTHON=/path/to/python3 and re-run."
     exit 1
 fi
+echo "  Bootstrap Python: ${BOOTSTRAP_PYTHON} ($("$BOOTSTRAP_PYTHON" --version 2>&1))"
 
 mkdir -p "${BINARIES_DIR}"
 # Check an existing uv before it downloads build dependencies.

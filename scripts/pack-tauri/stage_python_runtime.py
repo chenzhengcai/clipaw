@@ -17,6 +17,7 @@ the shared binary source for both the frozen backend and the helper runtime.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import platform
@@ -90,7 +91,11 @@ def _http_get(url: str) -> bytes:
                 f"HTTP {exc.code} fetching {url}; "
                 f"retrying in {wait}s ({attempt}/{HTTP_ATTEMPTS})",
             )
-        except OSError as exc:
+        except (OSError, http.client.HTTPException) as exc:
+            # http.client.HTTPException (IncompleteRead, RemoteDisconnected,
+            # BadStatusLine) is a transient transport failure on slow or
+            # unstable links, not an OSError subclass -- retry it too, or a
+            # single dropped connection aborts the whole desktop build.
             if attempt == HTTP_ATTEMPTS:
                 raise
             wait = 2 ** (attempt - 1)
