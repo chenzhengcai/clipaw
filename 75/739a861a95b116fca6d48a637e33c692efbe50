@@ -1,0 +1,92 @@
+console/src-tauri/src/backend.rs
+  h_b13b2cc86819f2 25-27,130,135-152,158
+console/src-tauri/src/backend/daemon.rs
+  h_b13b2cc86819f2 6-7,11-18,41-46,57,60-63,71-72,81-84,100,105-292
+console/src-tauri/src/backend/runtime.rs
+  h_b13b2cc86819f2 12-19,28-31,64-131,133,135,143,163-170,172-179,181-189,195-259,635-788
+console/src-tauri/src/lib.rs
+  h_b13b2cc86819f2 163-166
+console/src-tauri/src/tray.rs
+  h_b13b2cc86819f2 19-24,137-188,414-415,424-436,451-485
+console/src/api/clientConfig.ts
+  h_b13b2cc86819f2 2,4-5,7,9,12-15,18,22,27,31
+console/src/pages/Chat/index.tsx
+  h_b13b2cc86819f2 2806,2813,2820,4096,4123,4154
+docs/customs/README.md
+  h_b13b2cc86819f2 18,32
+docs/customs/fix-window-close-stuck-and-backend-orphan.md
+  h_b13b2cc86819f2 1-4
+docs/customs/voice-transcription.md
+  h_b13b2cc86819f2 127-157,164
+plugins/apps/background-theme/plugin.json
+  h_b13b2cc86819f2 4,20-23
+plugins/apps/background-theme/plugin.py
+  h_b13b2cc86819f2 327-332,343-364,367,372,421
+plugins/apps/background-theme/tests/frontend_lifecycle.test.js
+  h_b13b2cc86819f2 1-185
+plugins/apps/background-theme/ui/index.js
+  h_b13b2cc86819f2 25-55,66,230-235,271-274,490,502-505,513-520,624-627,639,641,643-644,665-669,673,689-690,693-695,700-705,710-711,1424-1498,1501
+plugins/apps/qwenpaw-voice/README.md
+  h_b13b2cc86819f2 21,24-30,39-40
+plugins/apps/qwenpaw-voice/backend/client_config.py
+  h_b13b2cc86819f2 2,4,9,13-20,22-28,32,34-38,40-46,51-55,57-59,61-62
+plugins/apps/qwenpaw-voice/backend/router.py
+  h_b13b2cc86819f2 2,4,6-7,10,15,23-28,36-66,70,77,79-81,83,87,96-100,104,113,119-123,126-127,130-132,139-142,144-146,148-156,158-159,162-177,179,181,185-192
+plugins/apps/qwenpaw-voice/backend/sessions.py
+  h_b13b2cc86819f2 1-33
+plugins/apps/qwenpaw-voice/backend/volcengine_asr.py
+  h_b13b2cc86819f2 47-48,80,84-86,89-90,93,97-100,109,111-113,119,123-134,140-141,143-147,194-198,371,375-384,425,429,443,446,454-457,463,472-473,501,507-510,512-513,529-536,540-544,549-563
+plugins/apps/qwenpaw-voice/frontend/dist/index.js
+  h_b13b2cc86819f2 1,4-5,10-11,13-16,18,100,107-111,114-118,120-122,126,132-134,136,140-141,144,147,153,160,163,168,174-176,178-179,181-182,184,186,191,194,198,202,206,209-210,213,215,219,221-222,224-225,227,231,241-242,244-245,255,258-259,261,263,265-266,268-269,272,275-279,281,286-287,292-299,302,312-315,319-325,327,331,333-334,338,342,344-345,351,359,369-371,374-375,378-383,385-388,390,392-393,395,398-400,402-415,417,420,422,424,427,429-432,434,438,442-447,449,452,454,456,459,461,463-465,467-479,481-505,507-508,511-519,522-533,535,538-541,543,545-547,549,552-553,556,558-560,567,574-594,597-622,625,629,633,637,640,643,653-656,660,663,665-668,670-675,677-681,683-685,689,691,693,696-697,699,703-704,707-708,710,714-715,717-719,722,724,728-729,733-734,737-738,741-742,747-752,754-755,758-759,762-763,768-773,776,781,783,785-788,794,796,799,801-804,806-807,809,812-814,817-819,822,825-827,838-842,845-871,873-874,876-885,888-889,891-892,894-901,903-917,919-920,922-929,931-941,944-958,960-962,964-965,972,974-976,981,983,986,989-990,994-995,998,1001,1006,1013-1014,1018
+plugins/apps/qwenpaw-voice/frontend/src/SpeechButton.tsx
+  h_b13b2cc86819f2 14,26,139-140,189-190,201-224,250-255,257,262,268,270-273,279,308,311,313,315,323,331-334,361,363,382-383,391,409-415,417-418,420,433,436-444,449,451,454,464-465,468,471-476,484-487,493
+plugins/apps/qwenpaw-voice/frontend/src/index.tsx
+  h_b13b2cc86819f2 40-104,112-114,203-205,216,224-263,266-267,271-272,277-280,284-287,296-304,307-313,315-317,322-324,332-341,348-354,361
+plugins/apps/qwenpaw-voice/frontend/src/useVoiceInput.ts
+  h_b13b2cc86819f2 25-33,35-54,79-82,84,86-102
+plugins/apps/qwenpaw-voice/plugin.json
+  h_b13b2cc86819f2 4,17,23-26
+plugins/apps/qwenpaw-voice/plugin.py
+  h_b13b2cc86819f2 27,43-44
+plugins/apps/qwenpaw-voice/tests/test_frontend_bundle.py
+  h_b13b2cc86819f2 1-66
+plugins/apps/qwenpaw-voice/tests/test_router.py
+  h_b13b2cc86819f2 1-87
+plugins/apps/qwenpaw-voice/tests/test_volcengine_asr.py
+  h_b13b2cc86819f2 1-189
+scripts/pack-tauri/app_plugins.py
+  h_b13b2cc86819f2 1-107
+scripts/pack-tauri/build_pyinstaller.ps1
+  h_b13b2cc86819f2 210-215
+scripts/pack-tauri/build_pyinstaller.sh
+  h_b13b2cc86819f2 178-182
+scripts/pack-tauri/qwenpaw.spec
+  h_b13b2cc86819f2 89-93
+src/qwenpaw/app/_app.py
+  h_b13b2cc86819f2 95-98,521-522
+src/qwenpaw/plugins/bundled_apps.py
+  h_b13b2cc86819f2 1-182
+src/qwenpaw/tauri/backend_guard.py
+  h_b13b2cc86819f2 82-84
+tests/unit/plugins/test_background_theme_plugin.py
+  h_b13b2cc86819f2 128-165,446-463
+tests/unit/plugins/test_bundled_apps.py
+  h_b13b2cc86819f2 1-118
+tests/unit/tauri/test_app_plugins_packaging.py
+  h_b13b2cc86819f2 1-69
+tests/unit/tauri/test_backend_guard.py
+  h_b13b2cc86819f2 63-64
+tests/unit/tauri/test_pyinstaller_spec.py
+  h_b13b2cc86819f2 187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "75739a861a95b116fca6d48a637e33c692efbe50",
+  "prompts": {},
+  "humans": {
+    "h_b13b2cc86819f2": {
+      "author": "霄骥 <chenzhengcai.czc@digital-engine.com>"
+    }
+  }
+}
